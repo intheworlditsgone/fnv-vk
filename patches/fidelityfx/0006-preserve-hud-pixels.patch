@@ -1,0 +1,19 @@
+--- a/sdk/include/FidelityFX/gpu/frameinterpolation/ffx_frameinterpolation_inpainting.h
++++ b/sdk/include/FidelityFX/gpu/frameinterpolation/ffx_frameinterpolation_inpainting.h
+@@ -120,13 +120,9 @@
+ 
+         if (any(FFX_GREATER_THAN(abs(fCurrentInterpolationSource - fPresentColor), FfxFloat32x3(0.0, 0.0, 0.0))))
+         {
+-            const FfxFloat32 fStaticFactor = CalculateStaticContentFactor(RawRGBToLinear(fCurrentInterpolationSource), RawRGBToLinear(fPresentColor));
+-
+-            if (fStaticFactor > FFX_FRAMEINTERPOLATION_EPSILON)
+-            {
+-                fInterpolatedColor.rgb = ffxLerp(fInterpolatedColor.rgb, fPresentColor, fStaticFactor);
+-                bWriteColor = true;
+-            }
++            // Both inputs have the same output encoding. Preserve pixels changed by the HUD or menu.
++            fInterpolatedColor.rgb = fPresentColor;
++            bWriteColor = true;
+         }
+     }
+ 

@@ -1,0 +1,13 @@
+cmake_minimum_required(VERSION 3.24)
+project(backend_test CXX)
+# Offline harness for the fnv_vk backend (x64, Khronos validation layer from the SDK, D3D9 as the oracle).
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(${CMAKE_CURRENT_LIST_DIR}/../../backend/CMakeLists.txt)
+add_executable(backend_test backend_test.cpp)
+target_link_libraries(backend_test PRIVATE fnvvk_backend d3d9 dbghelp)
+target_compile_options(backend_test PRIVATE /EHsc /utf-8 /W3 /permissive-)
+target_compile_definitions(backend_test PRIVATE _CRT_SECURE_NO_WARNINGS)
+if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+  target_link_options(backend_test PRIVATE /LARGEADDRESSAWARE)
+endif()

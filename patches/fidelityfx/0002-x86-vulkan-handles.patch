@@ -1,0 +1,660 @@
+diff --git a/ffx-api/include/ffx_api/ffx_api_types.h b/ffx-api/include/ffx_api/ffx_api_types.h
+index 87a9d0b..24192fc 100644
+--- a/ffx-api/include/ffx_api/ffx_api_types.h
++++ b/ffx-api/include/ffx_api/ffx_api_types.h
+@@ -25,6 +25,14 @@
+ #include <stdint.h>
+ #include <stdbool.h>
+ 
++/// A graphics API object handle (as FfxHandle, ffx_types.h): 64-bit on 32-bit targets, where Vulkan's non-dispatchable
++/// handles do not fit a pointer.
++#if UINTPTR_MAX == 0xFFFFFFFFu
++typedef uint64_t FfxApiHandle;
++#else
++typedef void* FfxApiHandle;
++#endif
++
+ /// An enumeration of surface formats. Needs to match enum FfxSurfaceFormat
+ enum FfxApiSurfaceFormat
+ {
+@@ -182,7 +190,7 @@ struct FfxApiResourceDescription
+ 
+ struct FfxApiResource
+ {
+-    void* resource;
++    FfxApiHandle resource;
+     struct FfxApiResourceDescription description;
+     uint32_t state;
+ };
+diff --git a/ffx-api/include/ffx_api/ffx_framegeneration.h b/ffx-api/include/ffx_api/ffx_framegeneration.h
+index 12f996d..471d3f8 100644
+--- a/ffx-api/include/ffx_api/ffx_framegeneration.h
++++ b/ffx-api/include/ffx_api/ffx_framegeneration.h
+@@ -103,7 +103,7 @@ typedef ffxReturnCode_t(*FfxApiFrameGenerationDispatchFunc)(ffxDispatchDescFrame
+ struct ffxConfigureDescFrameGeneration
+ {
+     ffxConfigureDescHeader header;
+-    void* swapChain;                                            ///< The swapchain to use with frame generation.
++    FfxApiHandle swapChain;                                     ///< The swapchain to use with frame generation.
+     FfxApiPresentCallbackFunc presentCallback;                  ///< A UI composition callback to call when finalizing the frame image.
+     void* presentCallbackUserContext;                           ///< A pointer to be passed to the UI composition callback.
+     FfxApiFrameGenerationDispatchFunc frameGenerationCallback;  ///< The frame generation callback to use to generate a frame.
+diff --git a/ffx-api/include/ffx_api/vk/ffx_api_vk.h b/ffx-api/include/ffx_api/vk/ffx_api_vk.h
+index 1f56ea6..27f5d67 100644
+--- a/ffx-api/include/ffx_api/vk/ffx_api_vk.h
++++ b/ffx-api/include/ffx_api/vk/ffx_api_vk.h
+@@ -349,7 +349,7 @@ static inline FfxApiResourceDescription ffxApiGetImageResourceDescriptionVK(cons
+     return resourceDescription;
+ }
+ 
+-static inline FfxApiResource ffxApiGetResourceVK(void* vkResource, FfxApiResourceDescription ffxResDescription, uint32_t state)
++static inline FfxApiResource ffxApiGetResourceVK(FfxApiHandle vkResource, FfxApiResourceDescription ffxResDescription, uint32_t state)
+ {
+     FfxApiResource resource = {};
+     resource.resource       = vkResource;
+diff --git a/ffx-api/src/vk/ffx_provider_framegenerationswapchain_vk.cpp b/ffx-api/src/vk/ffx_provider_framegenerationswapchain_vk.cpp
+index 9239318..bcfc075 100644
+--- a/ffx-api/src/vk/ffx_provider_framegenerationswapchain_vk.cpp
++++ b/ffx-api/src/vk/ffx_provider_framegenerationswapchain_vk.cpp
+@@ -58,7 +58,7 @@ VkResult vkCreateSwapchainFFXAPI(
+     }
+ 
+     if (result == VK_SUCCESS)
+-        *pSwapchain = reinterpret_cast<VkSwapchainKHR>(internal_context->fiSwapChain);
++        *pSwapchain = (VkSwapchainKHR)(internal_context->fiSwapChain);
+ 
+     return result;
+ }
+diff --git a/sdk/include/FidelityFX/host/backends/vk/ffx_vk.h b/sdk/include/FidelityFX/host/backends/vk/ffx_vk.h
+index b31d589..9f6719c 100644
+--- a/sdk/include/FidelityFX/host/backends/vk/ffx_vk.h
++++ b/sdk/include/FidelityFX/host/backends/vk/ffx_vk.h
+@@ -155,7 +155,7 @@ FFX_API FfxPipeline ffxGetPipelineVK(VkPipeline pipeline);
+ /// An abstract FidelityFX resources.
+ ///
+ /// @ingroup VKBackend
+-FFX_API FfxResource ffxGetResourceVK(void*  vkResource,
++FFX_API FfxResource ffxGetResourceVK(FfxHandle vkResource,
+     FfxResourceDescription                  ffxResDescription,
+     const wchar_t*                          ffxResName,
+     FfxResourceStates                       state = FFX_RESOURCE_STATE_COMPUTE_READ);
+diff --git a/sdk/include/FidelityFX/host/ffx_interface.h b/sdk/include/FidelityFX/host/ffx_interface.h
+index d7ba8ac..1c7b544 100644
+--- a/sdk/include/FidelityFX/host/ffx_interface.h
++++ b/sdk/include/FidelityFX/host/ffx_interface.h
+@@ -542,7 +542,7 @@ typedef void (*FfxBreadcrumbsWriteFunc)(
+     FfxCommandList commandList,
+     uint32_t value,
+     uint64_t gpuLocation,
+-    void* gpuBuffer,
++    FfxHandle gpuBuffer,
+     bool isBegin
+     );
+ 
+diff --git a/sdk/include/FidelityFX/host/ffx_types.h b/sdk/include/FidelityFX/host/ffx_types.h
+index ca9bc37..51c698c 100644
+--- a/sdk/include/FidelityFX/host/ffx_types.h
++++ b/sdk/include/FidelityFX/host/ffx_types.h
+@@ -556,6 +556,15 @@ typedef enum FfxBackbufferTransferFunction {
+     FFX_BACKBUFFER_TRANSFER_FUNCTION_SCRGB
+ } FfxBackbufferTransferFunction;
+ 
++/// A graphics API object handle. Pointer-sized objects (D3D12 interfaces, Vulkan dispatchable handles) fit a pointer;
++/// Vulkan's non-dispatchable handles (VkImage, VkBuffer, VkPipeline, VkSwapchainKHR...) are 64-bit on every platform,
++/// so on 32-bit targets the fields and types that carry them are 64-bit integers (fnv_vk: the game is a 32-bit process).
++#if UINTPTR_MAX == 0xFFFFFFFFu
++typedef uint64_t FfxHandle;
++#else
++typedef void* FfxHandle;
++#endif
++
+ /// A typedef representing the graphics device.
+ ///
+ /// @ingroup SDKTypes
+@@ -563,7 +572,7 @@ typedef void* FfxDevice;
+ 
+ typedef void* FfxCommandQueue;
+ 
+-typedef void* FfxSwapchain;
++typedef FfxHandle FfxSwapchain;
+ 
+ /// A typedef representing a command list or command buffer.
+ ///
+@@ -573,17 +582,17 @@ typedef void* FfxCommandList;
+ /// A typedef for a root signature.
+ ///
+ /// @ingroup SDKTypes
+-typedef void* FfxRootSignature;
++typedef FfxHandle FfxRootSignature;
+ 
+ /// A typedef for a command signature, used for indirect workloads
+ ///
+ /// @ingroup SDKTypes
+-typedef void* FfxCommandSignature;
++typedef FfxHandle FfxCommandSignature;
+ 
+ /// A typedef for a pipeline state object.
+ ///
+ /// @ingroup SDKTypes
+-typedef void* FfxPipeline;
++typedef FfxHandle FfxPipeline;
+ 
+ /// Allocate block of memory.
+ ///
+@@ -739,7 +748,7 @@ typedef struct FfxResourceDescription {
+ ///
+ /// @ingroup SDKTypes
+ typedef struct FfxResource {
+-    void*                           resource;                               ///< pointer to the resource.
++    FfxHandle                       resource;                               ///< pointer to the resource.
+     FfxResourceDescription          description;
+     FfxResourceStates               state;
+     wchar_t                         name[FFX_RESOURCE_NAME_SIZE];           ///< (optional) Resource name.
+@@ -792,8 +801,8 @@ typedef FfxConstantAllocation(*FfxConstantBufferAllocator)(
+ /// @ingroup SDKTypes
+ typedef struct FfxBreadcrumbsBlockData {
+     void*                           memory;                                 ///< Pointer to CPU mapped GPU buffer memory.
+-    void*                           heap;                                   ///< GPU memory block handle.
+-    void*                           buffer;                                 ///< GPU buffer handle for memory block.
++    FfxHandle                       heap;                                   ///< GPU memory block handle.
++    FfxHandle                       buffer;                                 ///< GPU buffer handle for memory block.
+     uint64_t                        baseAddress;                            ///< GPU address of memory block.
+     uint32_t                        nextMarker;                             ///< Index of next marker to be saved in memory block.
+ } FfxBreadcrumbsBlockData;
+diff --git a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp
+index 5c47b25..1417946 100644
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp
+@@ -204,9 +204,12 @@ struct DebugNameSetter
+         GET_DEVICE_PROC_ADDR(vkSetDebugUtilsObjectNameEXT);
+     }
+ 
+-    VkResult setDebugName(void* pObject, VkObjectType type, const char* name)
++    // Any Vulkan handle: dispatchable (a pointer) or not (64-bit, also on 32-bit targets).
++    template <typename Handle>
++    VkResult setDebugName(Handle object, VkObjectType type, const char* name)
+     {
+-        if (pObject != nullptr && vkSetDebugUtilsObjectNameEXTProc != nullptr && name != nullptr)
++        const uint64_t pObject = (uint64_t)object;
++        if (pObject != 0 && vkSetDebugUtilsObjectNameEXTProc != nullptr && name != nullptr)
+         {
+             VkDebugUtilsObjectNameInfoEXT nameInfo = {};
+             nameInfo.sType                         = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT;
+@@ -219,7 +222,8 @@ struct DebugNameSetter
+         return VK_SUCCESS;
+     }
+ 
+-    VkResult setDebugName(void* pObject, VkObjectType type, const char* name, uint32_t i)
++    template <typename Handle>
++    VkResult setDebugName(Handle pObject, VkObjectType type, const char* name, uint32_t i)
+     {
+         constexpr size_t cBufferSize = 64;
+         char             finalName[cBufferSize];
+@@ -492,7 +496,7 @@ void FrameInterpolationSwapChainVK::destroyImage(ReplacementResource& resource,
+ /// Vulkan API overridden functions
+ //////////////////////////////////////////////
+ 
+-VkResult vkAcquireNextImageFFX(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex)
++VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageFFX(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout, VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex)
+ {
+     if (swapchain != VK_NULL_HANDLE)
+     {
+@@ -531,7 +535,7 @@ VkResult vkCreateSwapchainFFX(VkDevice                           device,
+     return result;
+ }
+ 
+-void vkDestroySwapchainFFX(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator)
++VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainFFX(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator)
+ {
+     if (swapchain != VK_NULL_HANDLE)
+     {
+@@ -541,7 +545,7 @@ void vkDestroySwapchainFFX(VkDevice device, VkSwapchainKHR swapchain, const VkAl
+     }
+ }
+ 
+-VkResult vkGetSwapchainImagesFFX(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages)
++VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesFFX(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount, VkImage* pSwapchainImages)
+ {
+     if (swapchain != VK_NULL_HANDLE)
+     {
+@@ -557,7 +561,7 @@ VkResult vkGetSwapchainImagesFFX(VkDevice device, VkSwapchainKHR swapchain, uint
+     }
+ }
+ 
+-VkResult vkQueuePresentFFX(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
++VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentFFX(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+ {
+     if (pPresentInfo->swapchainCount == 0)
+     {
+@@ -581,7 +585,7 @@ VkResult vkQueuePresentFFX(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+ }
+ 
+ // Provided by VK_EXT_hdr_metadata
+-void vkSetHdrMetadataFFX(VkDevice device, uint32_t swapchainCount, const VkSwapchainKHR* pSwapchains, const VkHdrMetadataEXT* pMetadata)
++VKAPI_ATTR void VKAPI_CALL vkSetHdrMetadataFFX(VkDevice device, uint32_t swapchainCount, const VkSwapchainKHR* pSwapchains, const VkHdrMetadataEXT* pMetadata)
+ {
+     for (uint32_t i = 0; i < swapchainCount; ++i)
+     {
+@@ -698,7 +702,7 @@ FfxErrorCode ffxReplaceSwapchainForFrameinterpolationVK(FfxCommandQueue
+ {
+     FfxErrorCode status = FFX_OK;
+ 
+-    VkSwapchainKHR gameSwapchain = reinterpret_cast<VkSwapchainKHR>(gameSwapChain);
++    VkSwapchainKHR gameSwapchain = (VkSwapchainKHR)(gameSwapChain);
+     FFX_ASSERT(swapchainCreateInfo != VK_NULL_HANDLE);
+ 
+     if (frameInterpolationInfo == nullptr)
+@@ -1115,7 +1119,7 @@ DWORD WINAPI composeAndPresent_presenterThread(LPVOID pParam)
+                     SubmissionSemaphores toWait;
+                     toWait.add(presenter->gameSemaphore, entry.gameSemaphoreValue);
+ 
+-                    bool uiSurfaceTransfered = (entry.uiSurface.resource == nullptr) || (presenter->gameQueue.familyIndex == presenter->presentQueue.familyIndex);
++                    bool uiSurfaceTransfered = (!entry.uiSurface.resource) || (presenter->gameQueue.familyIndex == presenter->presentQueue.familyIndex);
+ 
+                     for (uint32_t frameType = 0; frameType < PacingData::FrameType::Count; frameType++)
+                     {
+@@ -2200,7 +2204,7 @@ VkResult FrameInterpolationSwapChainVK::presentInterpolated(const VkPresentInfoK
+ 
+     // interpolated
+     PacingData::FrameInfo& fiInterpolated = entry.frames[PacingData::FrameType::Interpolated_1];
+-    if (interpolatedFrame.resource != nullptr)
++    if (interpolatedFrame.resource)
+     {
+         fiInterpolated.doPresent                            = true;
+         fiInterpolated.resource                             = interpolatedFrame;
+@@ -2212,7 +2216,7 @@ VkResult FrameInterpolationSwapChainVK::presentInterpolated(const VkPresentInfoK
+     if (!presentInterpolatedOnly)
+     {
+         PacingData::FrameInfo& fiReal = entry.frames[PacingData::FrameType::Real];
+-        if (realFrame.resource != nullptr)
++        if (realFrame.resource)
+         {
+             fiReal.doPresent                            = true;
+             fiReal.resource                             = realFrame;
+@@ -2248,7 +2252,7 @@ void FrameInterpolationSwapChainVK::registerUiResource(FfxResource uiResource, u
+ 
+     presentInfo.currentUiSurface = uiResource;
+     presentInfo.uiCompositionFlags = flags;
+-    if (nullptr == uiResource.resource)
++    if (!uiResource.resource)
+         presentInfo.uiCompositionFlags &= ~FFX_UI_COMPOSITION_FLAG_ENABLE_INTERNAL_UI_DOUBLE_BUFFERING;
+ 
+     LeaveCriticalSection(&criticalSection);
+@@ -2908,7 +2912,7 @@ VkImageMemoryBarrier FrameInterpolationSwapChainVK::copyUiResource(VkCommandBuff
+         gameQueueWait.add(presentInfo.compositionSemaphore, framesSentForPresentation);
+     }
+ 
+-    VkImage imageSrc = reinterpret_cast<VkImage>(presentInfo.currentUiSurface.resource);
++    VkImage imageSrc = (VkImage)(presentInfo.currentUiSurface.resource);
+     VkImage imageDst = uiReplacementBuffer.image;
+ 
+     // transitions for copy
+@@ -2963,6 +2967,6 @@ VkImageMemoryBarrier FrameInterpolationSwapChainVK::copyUiResource(VkCommandBuff
+ 
+     postCopyBarriers.record(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
+ 
+-    presentInfo.currentUiSurface.resource = nullptr;
++    presentInfo.currentUiSurface.resource = 0;
+     return dstBarrier;
+ }
+diff --git a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.h b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.h
+index 0218ade..fd16d31 100644
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.h
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.h
+@@ -56,7 +56,7 @@ extern "C" {
+ #endif
+ 
+ // Provided by VK_KHR_swapchain
+-VkResult vkAcquireNextImageFFX(
++VKAPI_ATTR VkResult VKAPI_CALL vkAcquireNextImageFFX(
+     VkDevice                                    device,
+     VkSwapchainKHR                              swapchain,
+     uint64_t                                    timeout,
+@@ -70,23 +70,23 @@ VkResult vkCreateSwapchainFFX(
+     const VkAllocationCallbacks*                pAllocator,
+     VkSwapchainKHR*                             pSwapchain);
+ 
+-void vkDestroySwapchainFFX(
++VKAPI_ATTR void VKAPI_CALL vkDestroySwapchainFFX(
+     VkDevice                                    device,
+     VkSwapchainKHR                              swapchain,
+     const VkAllocationCallbacks*                pAllocator);
+ 
+-VkResult vkGetSwapchainImagesFFX(
++VKAPI_ATTR VkResult VKAPI_CALL vkGetSwapchainImagesFFX(
+     VkDevice                                    device,
+     VkSwapchainKHR                              swapchain,
+     uint32_t*                                   pSwapchainImageCount,
+     VkImage*                                    pSwapchainImages);
+ 
+-VkResult vkQueuePresentFFX(
++VKAPI_ATTR VkResult VKAPI_CALL vkQueuePresentFFX(
+     VkQueue                                     queue,
+     const VkPresentInfoKHR*                     pPresentInfo);
+ 
+ // Provided by VK_EXT_hdr_metadata
+-void vkSetHdrMetadataFFX(
++VKAPI_ATTR void VKAPI_CALL vkSetHdrMetadataFFX(
+     VkDevice device,
+     uint32_t swapchainCount,
+     const VkSwapchainKHR* pSwapchains,
+diff --git a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp
+index 48af082..becb85d 100644
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp
+@@ -57,7 +57,7 @@ void releaseDebugPacingGpuResources(const VkAllocationCallbacks* pAllocator)
+     s_debugPacingPipelineLayout = VK_NULL_HANDLE;
+ 
+     vkDestroyRenderPass(s_debugPacingDevice, s_debugPacingRenderPass, pAllocator);
+-    s_debugPacingRenderPass = nullptr;
++    s_debugPacingRenderPass = VK_NULL_HANDLE;
+ 
+     for (uint32_t i = 0; i < _countof(s_debugPacingImageRTViews); ++i)
+     {
+@@ -434,7 +434,7 @@ FFX_API FfxErrorCode ffxFrameInterpolationDebugPacing(const FfxPresentCallbackDe
+         return res;
+ 
+     VkCommandBuffer commandBuffer   = reinterpret_cast<VkCommandBuffer>(params->commandList);
+-    VkImage         backbufferImage = reinterpret_cast<VkImage>(params->currentBackBuffer.resource);
++    VkImage         backbufferImage = (VkImage)(params->currentBackBuffer.resource);
+     
+     FFX_ASSERT(commandBuffer != VK_NULL_HANDLE);
+     FFX_ASSERT(s_debugPacingPipeline != VK_NULL_HANDLE);
+diff --git a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp
+index eb88430..62c9177 100644
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp
+@@ -74,7 +74,7 @@ void releaseUiBlitGpuResources(const VkAllocationCallbacks* pAllocator)
+     s_uiCompositionDescriptorSetLayout = VK_NULL_HANDLE;
+ 
+     vkDestroyRenderPass(s_uiCompositionDevice, s_uiCompositionRenderPass, pAllocator);
+-    s_uiCompositionRenderPass = nullptr;
++    s_uiCompositionRenderPass = VK_NULL_HANDLE;
+ 
+     for (uint32_t i = 0; i < _countof(s_uiCompositionImageViews); ++i)
+     {
+@@ -488,7 +488,7 @@ FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallback
+     const VkAllocationCallbacks* pAllocator  = nullptr;
+ 
+     VkDevice device            = reinterpret_cast<VkDevice>(params->device);
+-    VkImage  renderTargetImage = reinterpret_cast<VkImage>(params->outputSwapChainBuffer.resource);
++    VkImage  renderTargetImage = (VkImage)(params->outputSwapChainBuffer.resource);
+ 
+     FFX_ASSERT(device != VK_NULL_HANDLE);
+     FFX_ASSERT(renderTargetImage != VK_NULL_HANDLE);
+@@ -499,8 +499,8 @@ FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallback
+         return res;
+ 
+     VkCommandBuffer commandBuffer   = reinterpret_cast<VkCommandBuffer>(params->commandList);
+-    VkImage         backbufferImage = reinterpret_cast<VkImage>(params->currentBackBuffer.resource);
+-    VkImage         uiImage         = reinterpret_cast<VkImage>(params->currentUI.resource);
++    VkImage         backbufferImage = (VkImage)(params->currentBackBuffer.resource);
++    VkImage         uiImage         = (VkImage)(params->currentUI.resource);
+     
+     FFX_ASSERT(commandBuffer != VK_NULL_HANDLE);
+     FFX_ASSERT(s_uiCompositionPipeline != VK_NULL_HANDLE);
+diff --git a/sdk/src/backends/vk/ffx_vk.cpp b/sdk/src/backends/vk/ffx_vk.cpp
+index d914479..00bdb92 100644
+--- a/sdk/src/backends/vk/ffx_vk.cpp
++++ b/sdk/src/backends/vk/ffx_vk.cpp
+@@ -57,7 +57,7 @@ FfxErrorCode           ScheduleGpuJobVK(FfxInterface* backendInterface, const Ff
+ FfxErrorCode           ExecuteGpuJobsVK(FfxInterface* backendInterface, FfxCommandList commandList, FfxUInt32 effectContextId);
+ FfxErrorCode           BreadcrumbsAllocBlockVK(FfxInterface* backendInterface, uint64_t blockBytes, FfxBreadcrumbsBlockData* blockData);
+ void                   BreadcrumbsFreeBlockVK(FfxInterface* backendInterface, FfxBreadcrumbsBlockData* blockData);
+-void                   BreadcrumbsWriteVK(FfxInterface* backendInterface, FfxCommandList commandList, uint32_t value, uint64_t gpuLocation, void* gpuBuffer, bool isBegin);
++void                   BreadcrumbsWriteVK(FfxInterface* backendInterface, FfxCommandList commandList, uint32_t value, uint64_t gpuLocation, FfxHandle gpuBuffer, bool isBegin);
+ void                   BreadcrumbsPrintDeviceInfoVK(FfxInterface* backendInterface, FfxAllocationCallbacks* allocs, bool extendedInfo, char** printBuffer, size_t* printSize);
+ void                   RegisterConstantBufferAllocatorVK(FfxInterface* backendInterface, FfxConstantBufferAllocator fpConstantAllocator);
+ 
+@@ -372,10 +372,10 @@ FfxCommandList ffxGetCommandListVK(VkCommandBuffer cmdBuf)
+ FfxPipeline ffxGetPipelineVK(VkPipeline pipeline)
+ {
+     FFX_ASSERT(NULL != pipeline);
+-    return reinterpret_cast<FfxPipeline>(pipeline);
++    return (FfxPipeline)(pipeline);
+ }
+ 
+-FfxResource ffxGetResourceVK(void* vkResource,
++FfxResource ffxGetResourceVK(FfxHandle vkResource,
+     FfxResourceDescription          ffxResDescription,
+     const wchar_t* ffxResName,
+     FfxResourceStates               state /*=FFX_RESOURCE_STATE_COMPUTE_READ*/)
+@@ -1324,7 +1324,7 @@ FfxConstantAllocation BackendContext_VK::FallbackConstantAllocator(void* data, F
+         allocation.handle = static_cast<FfxUInt64>(uniformBufferOffset);
+ 
+         void* pBuffer = (void*)((uint8_t*)(uniformBufferMem) + uniformBufferOffset);
+-        memcpy(pBuffer, data, dataSize);
++        memcpy(pBuffer, data, (size_t)dataSize);
+ 
+         // TODO: ensure that we aren't writing on some used memory
+ 
+@@ -2608,7 +2608,7 @@ FfxErrorCode RegisterResourceVK(
+     BackendContext_VK* backendContext = (BackendContext_VK*)(backendInterface->scratchBuffer);
+     BackendContext_VK::EffectContext& effectContext = backendContext->pEffectContexts[effectContextId];
+ 
+-    if (inFfxResource->resource == nullptr) {
++    if (!inFfxResource->resource) {
+ 
+         outFfxResourceInternal->internalIndex = 0; // Always maps to FFX_<feature>_RESOURCE_IDENTIFIER_NULL;
+         return FFX_OK;
+@@ -2667,9 +2667,9 @@ FfxErrorCode RegisterResourceVK(
+     // If we got here, we are setting up a new dynamic entry
+     backendResource->resourceDescription = inFfxResource->description;
+     if (inFfxResource->description.type == FFX_RESOURCE_TYPE_BUFFER)
+-        backendResource->bufferResource = reinterpret_cast<VkBuffer>(inFfxResource->resource);
++        backendResource->bufferResource = (VkBuffer)(inFfxResource->resource);
+     else
+-        backendResource->imageResource = reinterpret_cast<VkImage>(inFfxResource->resource);
++        backendResource->imageResource = (VkImage)(inFfxResource->resource);
+ 
+     copyResourceState(backendResource, inFfxResource);
+ 
+@@ -2786,7 +2786,7 @@ FfxResource GetResourceVK(FfxInterface* backendInterface, FfxResourceInternal in
+     FfxResourceDescription ffxResDescription = backendInterface->fpGetResourceDescription(backendInterface, inResource);
+ 
+     FfxResource resource = {};
+-    resource.resource = reinterpret_cast<void*>(backendContext->pResources[inResource.internalIndex].imageResource);
++    resource.resource = (FfxHandle)(backendContext->pResources[inResource.internalIndex].imageResource);
+     // If the internal resource state is undefined, that means we are importing a resource that
+     // has not yet been initialized, so we will flag it as such to finish initializing it later
+     // before it is used.
+@@ -2859,7 +2859,7 @@ FfxErrorCode registerStaticTextureSrv(BackendContext_VK* backendContext, const F
+         return FFX_ERROR_INSUFFICIENT_MEMORY;
+     }
+ 
+-    VkImage vkImage = reinterpret_cast<VkImage>(inResource->resource);
++    VkImage vkImage = (VkImage)(inResource->resource);
+ 
+     // Create SRVs and UAVs
+     switch (inResource->description.type)
+@@ -2973,7 +2973,7 @@ FfxErrorCode registerStaticBufferSrv(BackendContext_VK* backendContext, const Ff
+ 
+     if (inResource->description.type == FFX_RESOURCE_TYPE_BUFFER)
+     {
+-        VkBuffer buffer = reinterpret_cast<VkBuffer>(inResource->resource);
++        VkBuffer buffer = (VkBuffer)(inResource->resource);
+ 
+         VkWriteDescriptorSet   writeDescriptorSet   = {};
+         VkDescriptorBufferInfo bufferDescriptorInfo = {VK_NULL_HANDLE, 0, VK_WHOLE_SIZE};
+@@ -3010,7 +3010,7 @@ FfxErrorCode registerStaticTextureUav(BackendContext_VK* backendContext, const F
+         return FFX_ERROR_INSUFFICIENT_MEMORY;
+     }
+ 
+-    VkImage vkImage = reinterpret_cast<VkImage>(inResource->resource);
++    VkImage vkImage = (VkImage)(inResource->resource);
+ 
+     // Create SRVs and UAVs
+     switch (inResource->description.type)
+@@ -3124,7 +3124,7 @@ FfxErrorCode registerStaticBufferUav(BackendContext_VK* backendContext, const Ff
+ 
+     if (inResource->description.type == FFX_RESOURCE_TYPE_BUFFER)
+     {
+-        VkBuffer buffer = reinterpret_cast<VkBuffer>(inResource->resource);
++        VkBuffer buffer = (VkBuffer)(inResource->resource);
+ 
+         VkWriteDescriptorSet   writeDescriptorSet   = {};
+         VkDescriptorBufferInfo bufferDescriptorInfo = {VK_NULL_HANDLE, 0, VK_WHOLE_SIZE};
+@@ -3480,11 +3480,11 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+     if (pipelineDescription->indirectWorkload)
+     {
+         // Only need the stride ahead of time in Vulkan
+-        outPipeline->cmdSignature = reinterpret_cast<FfxCommandSignature>(sizeof(VkDispatchIndirectCommand));
++        outPipeline->cmdSignature = (FfxCommandSignature)(sizeof(VkDispatchIndirectCommand));
+     }
+     else
+     {
+-        outPipeline->cmdSignature = nullptr;
++        outPipeline->cmdSignature = 0;
+     }
+ 
+     uint32_t flattenedSrvTextureCount = 0;
+@@ -3639,7 +3639,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+     pipelineCreateInfo.layout = pPipelineLayout->pipelineLayout;
+ 
+     VkPipeline computePipeline = VK_NULL_HANDLE;
+-    if (backendContext->vkFunctionTable.vkCreateComputePipelines(backendContext->device, nullptr, 1, &pipelineCreateInfo, nullptr, &computePipeline) != VK_SUCCESS) {
++    if (backendContext->vkFunctionTable.vkCreateComputePipelines(backendContext->device, VK_NULL_HANDLE, 1, &pipelineCreateInfo, nullptr, &computePipeline) != VK_SUCCESS) {
+         return FFX_ERROR_BACKEND_API_ERROR;
+     }
+ 
+@@ -3647,7 +3647,7 @@ FfxErrorCode CreatePipelineVK(FfxInterface* backendInterface,
+     backendContext->vkFunctionTable.vkDestroyShaderModule(backendContext->device, shaderModule, nullptr);
+ 
+     // set the pipeline
+-    outPipeline->pipeline = reinterpret_cast<FfxPipeline>(computePipeline);
++    outPipeline->pipeline = (FfxPipeline)(computePipeline);
+ 
+     // Setup the pipeline name
+     wcscpy_s(outPipeline->name, pipelineDescription->name);
+@@ -3665,14 +3665,14 @@ FfxErrorCode DestroyPipelineVK(FfxInterface* backendInterface, FfxPipelineState*
+         return FFX_OK;
+ 
+     // Destroy the pipeline
+-    VkPipeline vkPipeline = reinterpret_cast<VkPipeline>(pipeline->pipeline);
++    VkPipeline vkPipeline = (VkPipeline)(pipeline->pipeline);
+     if (vkPipeline != VK_NULL_HANDLE) {
+         backendContext->vkFunctionTable.vkDestroyPipeline(backendContext->device, vkPipeline, VK_NULL_HANDLE);
+         pipeline->pipeline = VK_NULL_HANDLE;
+     }
+ 
+     // Zero out the cmd signature
+-    pipeline->cmdSignature = nullptr;
++    pipeline->cmdSignature = 0;
+ 
+     // Destroy the pipeline layout
+     BackendContext_VK::PipelineLayout* pPipelineLayout = reinterpret_cast<BackendContext_VK::PipelineLayout*>(pipeline->rootSignature);
+@@ -3941,7 +3941,7 @@ static FfxErrorCode executeGpuJobCompute(BackendContext_VK*    backendContext,
+     backendContext->vkFunctionTable.vkUpdateDescriptorSets(backendContext->device, descriptorWriteIndex, writeDescriptorSets, 0, nullptr);
+ 
+     // bind pipeline
+-    backendContext->vkFunctionTable.vkCmdBindPipeline(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, reinterpret_cast<VkPipeline>(job->computeJobDescriptor.pipeline.pipeline));
++    backendContext->vkFunctionTable.vkCmdBindPipeline(vkCommandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, (VkPipeline)(job->computeJobDescriptor.pipeline.pipeline));
+ 
+     // bind descriptor sets
+     {
+@@ -4260,8 +4260,8 @@ FfxErrorCode BreadcrumbsAllocBlockVK(
+                 if (mappedMemory || backendContext->vkFunctionTable.vkMapMemory(backendContext->device, memory, 0, blockBytes, 0, &mappedMemory) == VK_SUCCESS)
+                 {
+                     blockData->memory = mappedMemory;
+-                    blockData->heap = (void*)memory;
+-                    blockData->buffer = (void*)buffer;
++                    blockData->heap = (FfxHandle)memory;
++                    blockData->buffer = (FfxHandle)buffer;
+                     blockData->baseAddress = baseAddress;
+                     return FFX_OK;
+                 }
+@@ -4289,12 +4289,12 @@ void BreadcrumbsFreeBlockVK(
+     if (blockData->buffer)
+     {
+         backendContext->vkFunctionTable.vkDestroyBuffer(backendContext->device, (VkBuffer)blockData->buffer, nullptr);
+-        blockData->buffer = nullptr;
++        blockData->buffer = 0;
+     }
+     if (blockData->heap)
+     {
+         backendContext->vkFunctionTable.vkFreeMemory(backendContext->device, (VkDeviceMemory)blockData->heap, nullptr);
+-        blockData->heap = nullptr;
++        blockData->heap = 0;
+     }
+ }
+ 
+@@ -4303,11 +4303,11 @@ void BreadcrumbsWriteVK(
+     FfxCommandList commandList,
+     uint32_t value,
+     uint64_t gpuLocation,
+-    void* gpuBuffer,
++    FfxHandle gpuBuffer,
+     bool isBegin)
+ {
+     FFX_ASSERT(NULL != backendInterface);
+-    FFX_ASSERT(NULL != gpuBuffer);
++    FFX_ASSERT(0 != gpuBuffer);
+ 
+     BackendContext_VK* backendContext = (BackendContext_VK*)backendInterface->scratchBuffer;
+     if (FFX_CONTAINS_FLAG(backendContext->breadcrumbsFlags, BackendContext_VK::BREADCRUMBS_BUFFER_MARKER_ENABLED))
+@@ -4683,10 +4683,10 @@ FfxCommandQueue ffxGetCommandQueueVK(VkQueue commandQueue)
+ FfxSwapchain ffxGetSwapchainVK(VkSwapchainKHR swapchain)
+ {
+     FFX_ASSERT(swapchain != VK_NULL_HANDLE);
+-    return reinterpret_cast<FfxSwapchain>(swapchain);
++    return (FfxSwapchain)(swapchain);
+ }
+ 
+ VkSwapchainKHR ffxGetVKSwapchain(FfxSwapchain ffxSwapchain)
+ {
+-    return reinterpret_cast<VkSwapchainKHR>(ffxSwapchain);
++    return (VkSwapchainKHR)(ffxSwapchain);
+ }
+diff --git a/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp b/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
+index b5f1f74..0cac472 100644
+--- a/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
++++ b/sdk/src/components/fsr3upscaler/ffx_fsr3upscaler.cpp
+@@ -188,22 +188,22 @@ static void fsr3upscalerDebugCheckDispatch(FfxFsr3UpscalerContext_Private* conte
+         FFX_PRINT_MESSAGE(FFX_MESSAGE_TYPE_ERROR, L"commandList is null");
+     }
+ 
+-    if (params->color.resource == nullptr)
++    if (!params->color.resource)
+     {
+         FFX_PRINT_MESSAGE(FFX_MESSAGE_TYPE_ERROR, L"color resource is null");
+     }
+ 
+-    if (params->depth.resource == nullptr)
++    if (!params->depth.resource)
+     {
+         FFX_PRINT_MESSAGE(FFX_MESSAGE_TYPE_ERROR, L"depth resource is null");
+     }
+ 
+-    if (params->motionVectors.resource == nullptr)
++    if (!params->motionVectors.resource)
+     {
+         FFX_PRINT_MESSAGE(FFX_MESSAGE_TYPE_ERROR, L"motionVectors resource is null");
+     }
+ 
+-    if (params->exposure.resource != nullptr)
++    if (params->exposure.resource)
+     {
+         if ((context->contextDescription.flags & FFX_FSR3UPSCALER_ENABLE_AUTO_EXPOSURE) == FFX_FSR3UPSCALER_ENABLE_AUTO_EXPOSURE)
+         {
+@@ -211,7 +211,7 @@ static void fsr3upscalerDebugCheckDispatch(FfxFsr3UpscalerContext_Private* conte
+         }
+     }
+ 
+-    if (params->output.resource == nullptr)
++    if (!params->output.resource)
+     {
+         FFX_PRINT_MESSAGE(FFX_MESSAGE_TYPE_ERROR, L"output resource is null");
+     }
+diff --git a/sdk/src/shared/ffx_breadcrumbs_list.h b/sdk/src/shared/ffx_breadcrumbs_list.h
+index facc77e..6cf9529 100644
+--- a/sdk/src/shared/ffx_breadcrumbs_list.h
++++ b/sdk/src/shared/ffx_breadcrumbs_list.h
+@@ -58,7 +58,7 @@
+     FFX_BREADCRUMBS_APPEND_NUMBER(buff, count, number, 11, "%u")
+ 
+ #define FFX_BREADCRUMBS_APPEND_UINT64(buff, count, number) \
+-    FFX_BREADCRUMBS_APPEND_NUMBER(buff, count, number, 21, "%zu")
++    FFX_BREADCRUMBS_APPEND_NUMBER(buff, count, (unsigned long long)(number), 21, "%llu")
+ 
+ #define FFX_BREADCRUMBS_APPEND_FLOAT(buff, count, number) \
+     FFX_BREADCRUMBS_APPEND_NUMBER(buff, count, number, 18, "%.3f")

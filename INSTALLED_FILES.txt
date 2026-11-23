@@ -1,0 +1,24 @@
+Files this project places in the game folder (F:\SteamLibrary\steamapps\common\Fallout New Vegas). Nothing else in
+the game folder is modified. Remove these files to return the install to vanilla.
+
+xNVSE 6.4.9 (https://github.com/xNVSE/NVSE/releases/tag/6.4.9, nvse_6_4_9.7z):
+  nvse_loader.exe
+  nvse_1_4.dll
+  nvse_steam_loader.dll
+  Data\NVSE\nvse_config.ini
+
+fnv_vk plugin (built from plugin/):
+  Data\NVSE\Plugins\fnv_vk.dll
+  Data\NVSE\Plugins\fnv_vk.ini   (backend, menu key, [Display] HDR output, [Shadows] sun shadows, [Effect.<id>] effect settings)
+  Data\NVSE\Plugins\fnv_vk_shaders.bin   (the game's shaders translated to SPIR-V)
+  Data\NVSE\Plugins\fnv_vk.log   (written by the plugin)
+  Data\NVSE\Plugins\fnv_vk_pipelines.bin   (written by the plugin: recorded pipelines + driver pipeline cache)
+  Data\NVSE\Plugins\fnv_vk\effects\<id>\   (effects: effect.ini + GLSL passes; copied from effects/)
+  Data\NVSE\Plugins\fnv_vk\replacements\<id>\   (shader replacements: replace.ini + GLSL; the lighting's also
+    skin_detail_n.dds, the skin's detail normal map; copied from replacements/)
+  Data\NVSE\Plugins\fnv_vk\cache\   (written by the plugin: compiled effect shaders)
+  Data\NVSE\Plugins\fnv_vk_menu.ini   (written by the plugin: menu window positions)
+  Data\NVSE\Plugins\fnv_vk\LICENSE.txt   (GPL-3.0: the licence fnv_vk is distributed under)
+  Data\NVSE\Plugins\fnv_vk\THIRD_PARTY_NOTICES.md   (the bundled libraries and their licences)
+
+Data\NVSE and Data\NVSE\Plugins did not exist before.

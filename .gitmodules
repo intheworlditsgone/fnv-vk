@@ -1,0 +1,19 @@
+[submodule "third_party/dxbc-spirv"]
+	path = third_party/dxbc-spirv
+	url = https://github.com/doitsujin/dxbc-spirv.git
+[submodule "third_party/minhook"]
+	path = third_party/minhook
+	url = https://github.com/TsudaKageyu/minhook.git
+[submodule "third_party/DirectXTex"]
+	path = third_party/DirectXTex
+	url = https://github.com/microsoft/DirectXTex.git
+[submodule "third_party/VulkanMemoryAllocator"]
+	path = third_party/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+[submodule "third_party/glslang"]
+	path = third_party/glslang
+	url = https://github.com/KhronosGroup/glslang.git
+[submodule "third_party/FidelityFX-SDK"]
+	path = third_party/FidelityFX-SDK
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK.git
+	shallow = true

@@ -1,0 +1,140 @@
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.h
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.h
+@@ -198,6 +198,7 @@
+ 
+     // using win32 threads to set the priorities
+     HANDLE           presenterThreadHandle         = NULL;
++    CRITICAL_SECTION presenterQueueAccess = {};
+     CRITICAL_SECTION scheduledFrameCriticalSection = {};
+     HANDLE           presentEvent                  = NULL;
+     HANDLE           interpolationEvent            = NULL;
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp
+@@ -963,6 +963,7 @@
+ 
+                 if (entry.numFramesToPresent > 0)
+                 {
++                    EnterCriticalSection(&presenter->presenterQueueAccess);
+                     // we might have dropped entries so have to update here, otherwise we might deadlock
+                     // we need to track the latest signaled value to avoid validation warnings
+                     if (presenter->lastPresentSemaphoreValue != entry.numFramesSentForPresentationBase)
+@@ -1072,6 +1073,7 @@
+                         }
+                     }
+ 
++                    LeaveCriticalSection(&presenter->presenterQueueAccess);
+                     numFramesSentForPresentation = entry.numFramesSentForPresentationBase + entry.numFramesToPresent;
+                 }
+             }
+@@ -1108,6 +1110,7 @@
+ 
+                 if (entry.numFramesToPresent > 0)
+                 {
++                    EnterCriticalSection(&presenter->presenterQueueAccess);
+                     // we might have dropped entries so have to update here, otherwise we might deadlock
+                     // we need to track the latest signaled value to avoid validation warnings
+                     if (presenter->lastPresentSemaphoreValue != entry.numFramesSentForPresentationBase)
+@@ -1191,6 +1194,7 @@
+                         presenter->presentQueue.submit(VK_NULL_HANDLE, toWait, SubmissionSemaphores());
+                     }
+ 
++                    LeaveCriticalSection(&presenter->presenterQueueAccess);
+                     numFramesSentForPresentation = entry.numFramesSentForPresentationBase + entry.numFramesToPresent;
+                 }
+             }
+@@ -1588,6 +1592,7 @@
+     InitializeCriticalSection(&criticalSection);
+     InitializeCriticalSection(&criticalSectionUpdateConfig);
+     InitializeCriticalSection(&presentInfo.scheduledFrameCriticalSection);
++    InitializeCriticalSection(&presentInfo.presenterQueueAccess);
+     InitializeCriticalSection(&presentInfo.swapchainCriticalSection);
+ 
+     presentInfo.presentEvent       = CreateEvent(NULL, FALSE, FALSE, TEXT("PresentEvent"));
+@@ -1718,6 +1723,8 @@
+     // Wait for all operations to be finished
+     waitForPresents();
+     killPresenterThread();
++    releaseUiBlitGpuResources(pAllocator);
++    releaseDebugPacingGpuResources(pAllocator);
+ 
+     FFX_ASSERT_MESSAGE(device == presentInfo.device, "Attempting to destroy Frame interpolation swapchain with another device");
+ 
+@@ -1751,6 +1758,7 @@
+     DeleteCriticalSection(&criticalSection);
+     DeleteCriticalSection(&criticalSectionUpdateConfig);
+     DeleteCriticalSection(&presentInfo.scheduledFrameCriticalSection);
++    DeleteCriticalSection(&presentInfo.presenterQueueAccess);
+     DeleteCriticalSection(&presentInfo.swapchainCriticalSection);
+ 
+     SafeCloseHandle(presentInfo.presentEvent);
+@@ -1917,6 +1925,7 @@
+ 
+     FFX_ASSERT(waitRes);
+ 
++    EnterCriticalSection(&presentInfo.presenterQueueAccess);
+     // wait for queue idle too, to make sure all the semaphores are signaled
+     VkResult res = VK_SUCCESS; 
+     if (res == VK_SUCCESS && presentInfo.asyncComputeQueue.queue != VK_NULL_HANDLE)
+@@ -1934,6 +1943,7 @@
+             res = vkDeviceWaitIdle(presentInfo.device);
+     }
+ 
++    LeaveCriticalSection(&presentInfo.presenterQueueAccess);
+     return res == VK_SUCCESS;
+ }
+ 
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp
+@@ -53,9 +53,9 @@
+ 
+ void releaseUiBlitGpuResources(const VkAllocationCallbacks* pAllocator)
+ {
++    if (!s_uiCompositionDevice) return;
+     for (uint32_t i = 0; i < _countof(s_uiCompositionDescriptorSets); ++i)
+     {
+-        vkFreeDescriptorSets(s_uiCompositionDevice, s_uiCompositionDescriptorPool, 1, &s_uiCompositionDescriptorSets[i]);
+         s_uiCompositionDescriptorSets[i] = VK_NULL_HANDLE;
+     }
+ 
+@@ -86,6 +86,7 @@
+         vkDestroyFramebuffer(s_uiCompositionDevice, s_uiCompositionFramebuffers[i], pAllocator);
+         s_uiCompositionFramebuffers[i] = VK_NULL_HANDLE;
+     }
++    s_uiCompositionDevice = VK_NULL_HANDLE;
+ }
+ 
+ void DestroyUiCompositionPipeline(VkDevice device, const VkAllocationCallbacks* pAllocator)
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp
+@@ -47,6 +47,7 @@
+ 
+ void releaseDebugPacingGpuResources(const VkAllocationCallbacks* pAllocator)
+ {
++    if (!s_debugPacingDevice) return;
+     vkDestroyDescriptorPool(s_debugPacingDevice, s_debugPacingDescriptorPool, pAllocator);
+     s_debugPacingDescriptorPool = VK_NULL_HANDLE;
+ 
+@@ -69,6 +70,7 @@
+         vkDestroyFramebuffer(s_debugPacingDevice, s_debugPacingFramebuffers[i], pAllocator);
+         s_debugPacingFramebuffers[i] = VK_NULL_HANDLE;
+     }
++    s_debugPacingDevice = VK_NULL_HANDLE;
+ }
+ 
+ void DestroyDebugPacingPipeline(VkDevice device, const VkAllocationCallbacks* pAllocator)
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.h
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.h
+@@ -30,3 +30,5 @@
+ VkFormat ffxGetVkFormatFromSurfaceFormat(FfxSurfaceFormat fmt);
+ 
+ FFX_API FfxErrorCode ffxFrameInterpolationUiComposition(const FfxPresentCallbackDescription* params, void* unusedUserCtx);
++
++void releaseUiBlitGpuResources(const VkAllocationCallbacks* pAllocator);
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.h
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.h
+@@ -35,3 +35,5 @@
+ VkFormat ffxGetVkFormatFromSurfaceFormat(FfxSurfaceFormat fmt);
+ 
+ FFX_API FfxErrorCode ffxFrameInterpolationDebugPacing(const FfxPresentCallbackDescription* params, void* unusedUserCtx);
++
++void releaseDebugPacingGpuResources(const VkAllocationCallbacks* pAllocator);

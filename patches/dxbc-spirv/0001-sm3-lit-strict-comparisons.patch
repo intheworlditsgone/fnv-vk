@@ -1,0 +1,15 @@
+diff --git a/sm3/sm3_converter.cpp b/sm3/sm3_converter.cpp
+index 81a3bf3..4209d22 100644
+--- a/sm3/sm3_converter.cpp
++++ b/sm3/sm3_converter.cpp
+@@ -830,8 +830,8 @@ bool Converter::handleLit(ir::Builder& builder, const Instruction& op) {
+   if (writeMask & ComponentBit::eZ) {
+     /* dst.z = src.x > 0.0 && src.y > 0.0 ? pow(src.y, src.w) : 0.0 */
+ 
+-    auto zTestX = builder.add(ir::Op::FGe(ir::ScalarType::eBool, srcX,zeroFConst));
+-    auto zTestY = builder.add(ir::Op::FGe(ir::ScalarType::eBool, srcY, zeroFConst));
++    auto zTestX = builder.add(ir::Op::FGt(ir::ScalarType::eBool, srcX, zeroFConst));
++    auto zTestY = builder.add(ir::Op::FGt(ir::ScalarType::eBool, srcY, zeroFConst));
+     auto zTest = builder.add(ir::Op::BAnd(ir::ScalarType::eBool, zTestX, zTestY));
+ 
+     auto dstZ = builder.add(ir::Op::FPow(scalarType, srcY, power));

@@ -1,0 +1,28 @@
+diff --git a/sm3/sm3_converter.h b/sm3/sm3_converter.h
+index d51e30c..42ee21c 100644
+--- a/sm3/sm3_converter.h
++++ b/sm3/sm3_converter.h
+@@ -46,6 +46,10 @@ public:
+      *  texture type rather than the shader declaration in Shader Model 2
+      *  and 3 content. Must only be enabled for pixel shaders. */
+     bool forceDynamicTextureType = false;
++    /** Whether to emit the depth-compare sampling path selected at run time by the
++     *  sampler state's depth-compare flag. Content that never binds depth textures
++     *  can disable it, so no comparison sampling of colour views exists in the module. */
++    bool emitDepthCompare = true;
+   };
+ 
+   Converter(util::ByteReader code, const Options& options);
+diff --git a/sm3/sm3_resources.cpp b/sm3/sm3_resources.cpp
+index 89ec14c..5ab0fb6 100644
+--- a/sm3/sm3_resources.cpp
++++ b/sm3/sm3_resources.cpp
+@@ -605,7 +605,7 @@ void ResourceMap::emitSampleColorOrDref(
+         ir::SsaDef        lodBias,
+         ir::SsaDef        dx,
+         ir::SsaDef        dy) {
+-  if (textureType != SamplerStateType::eTexture3D) {
++  if (textureType != SamplerStateType::eTexture3D && m_converter.getOptions().emitDepthCompare) {
+     auto isDepth = loadSamplerState(builder, samplerIndex,
+       ir::LegacySamplerStateLayout::eUseDepthCompare);
+ 

@@ -1,0 +1,40 @@
+diff --git a/ffx-api/src/ffx_api.cpp b/ffx-api/src/ffx_api.cpp
+index 9852e63..a5332f5 100644
+--- a/ffx-api/src/ffx_api.cpp
++++ b/ffx-api/src/ffx_api.cpp
+@@ -45,6 +45,11 @@ FFX_API_ENTRY ffxReturnCode_t ffxCreateContext(ffxContext* context, ffxCreateCon
+ 
+     *context = nullptr;
+ 
++#ifdef FFX_BACKEND_VK
++    // fnv_vk: the Vulkan entry points come from the process's vulkan-1.dll (cmake/fidelityfx/vk_imports.h).
++    VERIFY(fnvvkFfxVulkanImportsResolved(), FFX_API_RETURN_ERROR_RUNTIME_ERROR);
++#endif
++
+     const ffxProvider* provider = GetffxProvider(desc->type, GetVersionOverride(desc), GetDevice(desc));
+     VERIFY(provider != nullptr, FFX_API_RETURN_NO_PROVIDER);
+     
+diff --git a/ffx-api/src/ffx_provider.cpp b/ffx-api/src/ffx_provider.cpp
+index d7c0e64..9d79b30 100644
+--- a/ffx-api/src/ffx_provider.cpp
++++ b/ffx-api/src/ffx_provider.cpp
+@@ -22,7 +22,9 @@
+ 
+ #include "ffx_provider.h"
+ 
++#ifndef FFX_NO_FSR2_PROVIDER
+ #include "ffx_provider_fsr2.h"
++#endif
+ #include "ffx_provider_fsr3upscale.h"
+ #include "ffx_provider_framegeneration.h"
+ #include "ffx_provider_external.h"
+@@ -42,7 +44,9 @@
+ 
+ static constexpr ffxProvider* providers[] = {
+     &ffxProvider_FSR3Upscale::Instance,
++#ifndef FFX_NO_FSR2_PROVIDER
+     &ffxProvider_FSR2::Instance,
++#endif
+     &ffxProvider_FrameGeneration::Instance,
+ #ifdef FFX_BACKEND_DX12
+     &ffxProvider_FrameGenerationSwapChain_DX12::Instance,

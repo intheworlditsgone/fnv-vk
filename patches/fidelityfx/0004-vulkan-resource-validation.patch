@@ -1,0 +1,85 @@
+--- a/sdk/include/FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h
++++ b/sdk/include/FidelityFX/gpu/fsr3upscaler/ffx_fsr3upscaler_callbacks_glsl.h
+@@ -395,7 +395,7 @@
+ #endif
+ 
+ #if defined(FSR3UPSCALER_BIND_UAV_LUMA_HISTORY)
+-layout (set = 0, binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba8) uniform image2D  rw_luma_history;
++layout (set = 0, binding = FSR3UPSCALER_BIND_UAV_LUMA_HISTORY, rgba16f) uniform image2D  rw_luma_history;
+ 
+ void StoreLumaHistory(FfxInt32x2 iPxPos, FfxFloat32x4 fLumaHistory)
+ {
+--- a/sdk/src/backends/vk/ffx_vk.cpp
++++ b/sdk/src/backends/vk/ffx_vk.cpp
+@@ -1529,7 +1529,7 @@
+         descriptorPoolCreateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+         descriptorPoolCreateInfo.pNext = nullptr;
+         descriptorPoolCreateInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+-        descriptorPoolCreateInfo.poolSizeCount = 5;
++        descriptorPoolCreateInfo.poolSizeCount = sizeof(poolSizes) / sizeof(poolSizes[0]);
+         descriptorPoolCreateInfo.pPoolSizes = poolSizes;
+         descriptorPoolCreateInfo.maxSets = backendContext->maxEffectContexts * FFX_MAX_PASS_COUNT * MAX_PIPELINE_USAGE_PER_FRAME * FFX_MAX_QUEUED_FRAMES;
+ 
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_DebugPacing.cpp
+@@ -214,7 +214,7 @@
+         rasterizationStateCreateInfo.depthBiasConstantFactor                = 0.0f;
+         rasterizationStateCreateInfo.depthBiasClamp                         = 0.0f;
+         rasterizationStateCreateInfo.depthBiasSlopeFactor                   = 0.0f;
+-        rasterizationStateCreateInfo.lineWidth                              = 0.0f;
++        rasterizationStateCreateInfo.lineWidth                              = 1.0f;
+ 
+         VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {};
+         depthStencilStateCreateInfo.sType                                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK_UiComposition.cpp
+@@ -242,7 +242,7 @@
+         rasterizationStateCreateInfo.depthBiasConstantFactor                = 0.0f;
+         rasterizationStateCreateInfo.depthBiasClamp                         = 0.0f;
+         rasterizationStateCreateInfo.depthBiasSlopeFactor                   = 0.0f;
+-        rasterizationStateCreateInfo.lineWidth                              = 0.0f;
++        rasterizationStateCreateInfo.lineWidth                              = 1.0f;
+ 
+         VkPipelineDepthStencilStateCreateInfo depthStencilStateCreateInfo = {};
+         depthStencilStateCreateInfo.sType                                 = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+--- a/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp
++++ b/sdk/src/backends/vk/FrameInterpolationSwapchain/FrameInterpolationSwapchainVK.cpp
+@@ -1123,7 +1123,6 @@
+                         if (frameInfo.doPresent)
+                         {
+                             SubmissionSemaphores toSignal;
+-                            toSignal.add(presenter->frameRenderedSemaphores[0]);  // not a timeline semaphore
+ 
+                             // signal replacement buffer availability
+                             // this is the last present of this entry
+@@ -1148,6 +1147,7 @@
+ 
+                             if (res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR)
+                             {
++                                toSignal.add(presenter->frameRenderedSemaphores[realSwapchainImageIndex]);
+                                 toWait.add(acquireSemaphore);
+ 
+                                 res = compositeSwapChainFrame(presenter,
+@@ -1163,7 +1163,7 @@
+                                 waitForPerformanceCount(previousPresentQpc + frameInfo.presentQpcDelta);
+                                 QueryPerformanceCounter(reinterpret_cast<LARGE_INTEGER*>(&previousPresentQpc));
+ 
+-                                res = presentToSwapChain(presenter, realSwapchainImageIndex);
++                                res = presentToSwapChain(presenter, realSwapchainImageIndex, realSwapchainImageIndex);
+                                 // VK_SUBOPTIMAL_KHR & VK_ERROR_OUT_OF_DATE_KHR: the swapchain has been recreated
+                                 FFX_ASSERT_MESSAGE_FORMAT(res == VK_SUCCESS || res == VK_SUBOPTIMAL_KHR || res == VK_ERROR_OUT_OF_DATE_KHR,
+                                                           "presentToSwapChain failed with error %d",
+@@ -1644,13 +1644,6 @@
+     presentInfo.realSwapchainImageDescription.flags    = FFX_RESOURCE_FLAGS_NONE;
+     presentInfo.realSwapchainImageDescription.usage    = static_cast<FfxResourceUsage>(FFX_RESOURCE_USAGE_RENDERTARGET | FFX_RESOURCE_USAGE_UAV);
+ 
+-    // create the semaphore for each image to wait on
+-    for (uint32_t i = 0; i < presentInfo.realSwapchainImageCount; ++i)
+-    {
+-        res = createSemaphoreFormat(presentInfo.frameRenderedSemaphores[i], "AMD swapchain image semaphore %d", i);
+-        EXIT_ON_VKRESULT_NOT_SUCCESS(res);
+-    }
+-
+     // create the fake backbuffer images
+     FFX_ASSERT_MESSAGE(pCreateInfo->minImageCount <= FFX_FRAME_INTERPOLATION_SWAP_CHAIN_MAX_BUFFER_COUNT, "Too many backbuffer requested");
+     gameBufferCount = pCreateInfo->minImageCount;

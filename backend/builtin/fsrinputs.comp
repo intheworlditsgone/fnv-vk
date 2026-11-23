@@ -1,0 +1,60 @@
+#version 450
+// FSR 3.1 inputs at the render resolution (backend_ffx.inl, Backend::upscaleScene): the depth FSR reads, and motion
+// vectors.
+//
+// The game draws the world, then clears the depth buffer and draws the first-person view (arms, weapon, Pip-Boy) with its
+// own projection (TESMain::DrawWorld_MTRender1stPerson, RendererClearBufferHook(0, 4)). `sceneDepth` is the depth buffer
+// at the end (first person where it was drawn, cleared elsewhere), `worldDepth` its copy at the end of the world pass.
+// - Depth: the first-person view's where it was drawn, the world's elsewhere.
+// - Motion: the world's from the camera's motion (current to previous: the pixel's surface reconstructed from its depth
+//   with the current camera, projected with the previous one), in UV units (FSR scales them by the render size). The
+//   first-person view moves with the camera: no motion. Objects that move by themselves (actors) get the camera's motion
+//   only: the game draws no motion vectors.
+// View space as backend/effectlib.cpp's fnvViewPos and fnvPrevPixel: x right, y up, z forward; camera rows are the world
+// rotation (columns direction, up, right).
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D sceneDepth;
+layout(set = 0, binding = 1) uniform sampler2D worldDepth;
+layout(set = 0, binding = 2, rg16f) uniform writeonly image2D outMotion;
+layout(set = 0, binding = 3, r32f) uniform writeonly image2D outDepth;
+layout(set = 0, binding = 4, std140) uniform Camera {
+  vec4 rot[3];       // current camera rows (rotation), w: the camera's translation since the previous frame
+  vec4 prevRot[3];   // previous camera rows (rotation), w unused
+  vec4 frustum;      // current frustum tangents: left, right, top, bottom
+  vec4 prevFrustum;  // previous
+  vec4 port;         // camera viewport in the image (pixels): x, y, width, height
+  vec4 info;         // near, far, 1: worldDepth holds this frame's world, 1: a previous camera exists
+} cam;
+
+float linearZ(float d) { return cam.info.x * cam.info.y / (cam.info.y - d * (cam.info.y - cam.info.x)); }
+
+void main() {
+  const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+  if (any(greaterThanEqual(p, imageSize(outDepth)))) return;
+  const float scene = texelFetch(sceneDepth, p, 0).r;
+  const float world = cam.info.z != 0.0 ? texelFetch(worldDepth, p, 0).r : scene;
+  // Drawn after the clear (to 1.0) that precedes the first-person view. Without a first-person pass (third person, VATS,
+  // dialogue) nothing clears the depth: the buffer still holds exactly the world's depth.
+  const bool firstPerson = cam.info.z != 0.0 && scene < 1.0 && scene != world;
+  imageStore(outDepth, p, vec4(firstPerson ? scene : world));
+
+  vec2 motion = vec2(0.0);
+  if (!firstPerson && cam.info.w != 0.0) {
+    const vec2 uv = (vec2(p) + 0.5 - cam.port.xy) / cam.port.zw;
+    // The sky (far plane): only the rotation matters; the far plane's distance keeps translation negligible.
+    const float z = linearZ(min(world, 1.0));
+    const vec3 v = vec3(mix(cam.frustum.x, cam.frustum.y, uv.x) * z, mix(cam.frustum.z, cam.frustum.w, uv.y) * z, z);
+    const vec3 l = vec3(v.z, v.y, v.x);  // (direction, up, right) components
+    // World offset from the previous camera's position: R l + (T - Tprev).
+    const vec3 d = vec3(dot(cam.rot[0].xyz, l), dot(cam.rot[1].xyz, l), dot(cam.rot[2].xyz, l)) +
+                   vec3(cam.rot[0].w, cam.rot[1].w, cam.rot[2].w);
+    const vec3 pl = d.x * cam.prevRot[0].xyz + d.y * cam.prevRot[1].xyz + d.z * cam.prevRot[2].xyz;
+    const vec3 q = vec3(pl.z, pl.y, pl.x);
+    if (q.z > 1e-4) {
+      const vec4 pf = cam.prevFrustum;
+      const vec2 prevUv = vec2((q.x / q.z - pf.x) / (pf.y - pf.x), (q.y / q.z - pf.z) / (pf.w - pf.z));
+      motion = prevUv - uv;
+    }
+  }
+  imageStore(outMotion, p, vec4(motion, 0.0, 0.0));
+}
