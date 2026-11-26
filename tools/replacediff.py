@@ -67,13 +67,14 @@ def main():
         keep = set(a.only.split(','))
         targets = {k: v for k, v in targets.items() if k in keep}
     m = json.load(open(os.path.join(cache, 'manifest.json'), encoding='utf-8'))['shaders']
+    import configparser
+    ini = configparser.ConfigParser(strict=False, interpolation=None)
+    ini.optionxform = str
+    ini.read(os.path.join('replacements', a.id, 'replace.ini'))
     wanted = None
     if a.package:
         wanted = {a.package}
     else:
-        import configparser
-        ini = configparser.ConfigParser(strict=False, interpolation=None)
-        ini.read(os.path.join('replacements', a.id, 'replace.ini'))
         pk = ini.get('Replacement', 'Packages', fallback='')
         if pk.strip():
             wanted = {'%03d' % int(x) for x in pk.replace(',', ' ').split()}
@@ -91,18 +92,27 @@ def main():
             # The sun shadow block (9; its cascades 48 / 49 are also the wet world's rain cover, block 12).
             sun = s.get('sunLight', -1) if (1, 9) in binds else -1
             if (1, 9) in binds and sun < 0:
+                # Lighting30Shader's builds (the hair): no PSLightColor, so the sun shadow pass does not mark them; the
+                # sun's colour is LightData[0] (docs/LIGHTING.md "Hair").
+                sun = next((c['index'] for c in s['ctab'] if c['name'] == 'LightData' and c['set'] == 'float4'), -1)
+            if (1, 9) in binds and sun < 0:
                 raise SystemExit('%s declares the sun shadow bindings but the original has no sun light colour' % nm)
             for st, b in binds:
                 if st != 1:
                     continue
-                if b < 16 or b == 59:  # the blocks (13: the skin buffer's, with 61 / 62), the skin's detail map (59 / 60)
+                # The blocks (13: the skin buffer's, with 61 / 62), the skin's detail map (59 / 60), the hair's tangent
+                # shift map (63 / 64).
+                if b < 16 or b == 59 or b == 63:
                     cbvs.append(b)
                 elif b < 32:
                     reg = b - 16
                     if reg not in kinds:
                         raise SystemExit('%s samples s%d, which the original does not declare' % (nm, reg))
                     tex.append((reg, kinds[reg]))
-            defs = ','.join('/'.join(repr(float(x)) if i else str(int(x)) for i, x in enumerate(d)) for d in s.get('defs', []))
+            # The original's defs, as the plugin overlays them: not at the target's GameConstants registers.
+            game = {int(x) for x in ini.get('Shader.' + nm, 'GameConstants', fallback='').replace(',', ' ').split()}
+            defs = ','.join('/'.join(repr(float(x)) if i else str(int(x)) for i, x in enumerate(d))
+                            for d in s.get('defs', []) if int(d[0]) not in game)
             shutil.copy(spv, os.path.join(work, 'spv', h + '.spv'))
             shutil.copy(os.path.join(cache, 'spv', h + '.dxso'), os.path.join(work, 'spv', h + '.dxso'))
             jobs.append('%s %s %s %s %s %d' % (h, s['profile'], ','.join(map(str, sorted(set(cbvs)))) or '-',

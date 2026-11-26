@@ -1046,6 +1046,171 @@ vec3 fnvSkinDetail(vec3 n, vec2 uv) {
   return normalize(n1 * dot(n1, n2) / n1.z - n2);
 }
 #endif
+#ifdef FNV_HAIR
+// Hair (FNV_HAIR; docs/LIGHTING.md "Hair"), ported from Community Shaders' Hair Specular (GPL-3.0: features/Hair
+// Specular/Shaders/Hair/Hair.hlsli, package/Shaders/Lighting.hlsl's CS_HAIR_SHADING, Common/LightDisk.hlsli without light
+// disks) with its default settings (src/Features/HairSpecular.h): the Marschner model (glossiness 70: roughness 0.3;
+// transmission 1; diffuse, specular and their indirect multipliers 1), the tangent shift map, and the screen-space self
+// shadow (strength 1, exponent 0.1, scale 2.5). Lights follow the game's convention (a light's colour c is the diffuse
+// light on a white surface facing it: irradiance pi c, Community Shaders' PBRLightingCompensation).
+layout(set = 1, binding = 63) uniform texture2D fnvHairShiftMap;
+layout(set = 1, binding = 64) uniform sampler fnvHairShiftSampler;
+const float kHairRoughness = 0.3, kHairTransmission = 1.0, kHairBaseColorMult = 1.5;
+const float kHairSelfShadowStrength = 1.0, kHairSelfShadowExponent = 0.1, kHairSelfShadowScale = 2.5;
+const float kHairPi = 3.14159265;
+const float kHairF0 = ((1.0 - 1.55) / (1.0 + 1.55)) * ((1.0 - 1.55) / (1.0 + 1.55));  // HairF0: index of refraction 1.55
+float fnvHairSchlick(float vh) {
+  const float fc = pow(1.0 - vh, 5.0);
+  return fc + (1.0 - fc) * kHairF0;
+}
+float fnvHairGauss(float b, float theta) { return exp(-0.5 * theta * theta / (b * b)) / (sqrt(2.0 * kHairPi) * b); }
+// The model's base colour from the hair's albedo (gamma, tinted). Community Shaders saturates it (saturation 1), scales
+// it by 1.5 and squares it, and shows the model's output as it is (gamma): its colour terms are powers of the base
+// (the diffuse scatter sqrt(base), the absorption base^k), so the displayed colour is the albedo's to those powers.
+// Here the output is linear (shown through 1 / 2.2): the same base dependence needs the linear colour squared. With the
+// linear colour alone the scatter's sqrt halves the colour's saturation (brown hair renders grey).
+vec3 fnvHairBaseColor(vec3 albedo) {
+  const vec3 lin = pow(clamp(albedo, 0.0, 1.0) * kHairBaseColorMult, vec3(2.2));
+  return lin * lin;
+}
+// The strand direction in tangent space (CS: the mesh's bitangent reoriented to the shading normal n, unit), shifted along
+// n by the tangent shift map (centred on 0.5; no shift without the map: the zero dummy).
+vec3 fnvHairStrand(vec3 n, vec2 uv) {
+  vec3 t = vec3(0.0, 1.0, 0.0) - n * n.y;
+  t = dot(t, t) > 1e-8 ? normalize(t) : normalize(vec3(1.0, 0.0, 0.0) - n * n.x);
+  const float s = textureLod(sampler2D(fnvHairShiftMap, fnvHairShiftSampler), uv, 0.0).x;
+  return s > 0.0 ? normalize(t + n * (s - 0.5)) : t;
+}
+// Hair::D_Marschner: L, V unit; T the strand (unit); base the linear base colour; area the lobes' widening; backlit the
+// transmitted lobe's weight.
+vec3 fnvHairMarschner(vec3 L, vec3 V, vec3 T, float roughness, vec3 base, float area, float backlit) {
+  const float TdotL = dot(T, L), TdotV = dot(T, V), VdotL = dot(V, L);
+  const float cosThetaL = sqrt(max(0.0, 1.0 - TdotL * TdotL));
+  const float cosThetaV = sqrt(max(0.0, 1.0 - TdotV * TdotV));
+  const float cosThetaD = sqrt((1.0 + cosThetaL * cosThetaV + TdotV * TdotL) / 2.0);
+  const vec3 Lp = L - TdotL * T, Vp = V - TdotV * T;
+  const float cosPhi = dot(Lp, Vp) * inversesqrt(dot(Lp, Lp) * dot(Vp, Vp) + 1e-6);
+  const float cosHalfPhi = sqrt(clamp(0.5 + 0.5 * cosPhi, 0.0, 1.0));
+  const float nPrime = 1.19 / cosThetaD + 0.36 * cosThetaD;
+  const vec3 alpha = vec3(-0.0499 * 2.0, 0.0499, 0.0499 * 4.0);
+  const vec3 B = area + roughness * vec3(1.0, 0.5, 2.0);
+  const float thetaH = TdotL + TdotV;
+  // R
+  float Mp = fnvHairGauss(B.x, thetaH - alpha.x);
+  float Np = 0.25 * cosHalfPhi;
+  float Fp = fnvHairSchlick(sqrt(clamp(0.5 + 0.5 * VdotL, 0.0, 1.0)));
+  const vec3 R = vec3(Mp * Np * Fp * mix(1.0, backlit, clamp(-VdotL, 0.0, 1.0)));
+  // TT
+  Mp = fnvHairGauss(B.y, thetaH - alpha.y);
+  const float a = 1.0 / nPrime;
+  const float h = cosHalfPhi * (1.0 + a * (0.6 - 0.8 * cosPhi));
+  float f = fnvHairSchlick(cosThetaD * sqrt(clamp(1.0 - h * h, 0.0, 1.0)));
+  Fp = (1.0 - f) * (1.0 - f);
+  vec3 Tp = pow(abs(base), vec3(0.5 * sqrt(max(1.0 - (h * a) * (h * a), 0.0)) / cosThetaD));
+  Np = exp(-3.65 * cosPhi - 3.98);
+  const vec3 TT = Mp * Np * Fp * Tp * backlit;
+  // TRT
+  Mp = fnvHairGauss(B.z, thetaH - alpha.z);
+  f = fnvHairSchlick(cosThetaD * 0.5);
+  Fp = (1.0 - f) * (1.0 - f) * f;
+  Tp = pow(abs(base), vec3(0.8 / cosThetaD));
+  Np = exp(17.0 * cosPhi - 16.78);
+  const vec3 TRT = Mp * Np * Fp * Tp;
+  return max(R + TT + TRT, 0.0);
+}
+// Hair::GetHairDiffuseAttenuationKajiyaKay: the diffuse scatter (with its 1 / pi), tinted by the base colour where the
+// light is shadowed.
+vec3 fnvHairKajiya(vec3 T, vec3 V, vec3 L, float shadow, vec3 base) {
+  const float TdotL = dot(T, L), TdotV = dot(T, V);
+  const float kajiya = 1.0 - abs(TdotL);
+  const vec3 fake = V - T * TdotV;
+  const vec3 fakeN = dot(fake, fake) > 1e-12 ? normalize(fake) : vec3(0.0);
+  const float wrapped = clamp((dot(fakeN, L) + 1.0) * 0.25, 0.0, 1.0);
+  const float scatter = (1.0 / kHairPi) * mix(wrapped, kajiya, 0.33);
+  const float luma = max(dot(base, vec3(0.2125, 0.7154, 0.0721)), 1e-4);
+  const vec3 tint = shadow < 1.0 ? pow(abs(base / luma), vec3(1.0 - shadow)) : vec3(1.0);
+  return max(sqrt(base) * scatter * tint, 0.0);
+}
+// One light (Hair::GetHairDirectLightMarschner): L unit, c its linear colour (unshadowed), shadow its visibility (the
+// shadow maps and the self shadow); the light leaving the hair toward V (the base colour is in it).
+vec3 fnvHairLight(vec3 T, vec3 V, vec3 L, vec3 c, float shadow, vec3 base) {
+  return (fnvHairMarschner(L, V, T, kHairRoughness, base, 0.0, kHairTransmission) + fnvHairKajiya(T, V, L, shadow, base)) *
+         (c * kHairPi * shadow);
+}
+// The ambient's weight (Hair::GetHairIndirectLobeWeights, Marschner): light from the direction across the strand facing
+// the view; times the ambient irradiance / pi (the game's ambient colour).
+vec3 fnvHairIndirect(vec3 T, vec3 V, vec3 base) {
+  const vec3 across = V - T * dot(V, T);
+  if (dot(across, across) <= 1e-12) return vec3(0.0);
+  const vec3 L = normalize(across);
+  return (fnvHairMarschner(L, V, T, kHairRoughness, base, 0.2, 0.0) + fnvHairKajiya(T, V, L, 1.0, base)) * kHairPi;
+}
+#ifdef FNV_AO
+// The self shadow (Hair::HairSelfShadow): 4 steps toward the light over 2.5 cm (game units: 1.428 cm each), from a
+// screen-noise start, against the scene's depth. The depth is what the lighting has: the ambient occlusion's published
+// depth (the previous frame's, reprojected as fnvAmbientOcclusion does); none while the ambient occlusion is off.
+// The light's direction comes in the hair's own space (the shader's light vectors: the model or skin space of its
+// position input); its view-space direction is that space's map to the view, recovered from the screen derivatives of the
+// fragment's view position and of its position in that space (exact within a triangle: helper lanes interpolate the same
+// plane). That map is a rotation and a uniform scale composed with the view's mirror (view x right, y up, z forward from
+// the game's right-handed world: fnvWorldPos swaps x and z), so the face normal maps to minus the view-space face normal.
+struct FnvHairFrame {
+  vec3 p;               // the fragment's view position
+  vec3 dpx, dpy;        // its screen derivatives
+  vec3 dmx, dmy;        // the screen derivatives of its position in the hair's space
+};
+// At the top of main (screen derivatives), with the position input in the hair's space.
+FnvHairFrame fnvHairFrame(vec3 position) {
+  FnvHairFrame f;
+  const vec4 rect = fnvAo[1], fr = fnvAo[2];
+  const float zn = fnvAo[3].x, zf = fnvAo[3].y;
+  const float z = zn * zf / (zf - gl_FragCoord.z * (zf - zn));
+  const float u = (gl_FragCoord.x - rect.x) / rect.z, v = (gl_FragCoord.y - rect.y) / rect.w;
+  f.p = vec3(mix(fr.x, fr.y, u) * z, mix(fr.z, fr.w, v) * z, z);
+  f.dpx = dFdx(f.p);
+  f.dpy = dFdy(f.p);
+  f.dmx = dFdx(position);
+  f.dmy = dFdy(position);
+  return f;
+}
+// A direction in the hair's space, in view space (unit); vec3(0) where the derivatives are degenerate.
+vec3 fnvHairToView(FnvHairFrame f, vec3 d) {
+  const vec3 nm = cross(f.dmx, f.dmy), nv = cross(f.dpx, f.dpy);
+  const float det = dot(nm, nm), nvLen = length(nv);
+  if (det < 1e-30 || nvLen < 1e-30) return vec3(0.0);
+  const float k = sqrt(nvLen * inversesqrt(det));  // the uniform scale: |nv| = k^2 |nm|
+  const float a = dot(cross(f.dmy, nm), d) / det, b = dot(cross(nm, f.dmx), d) / det, c = dot(nm, d) / det;
+  const vec3 w = a * f.dpx + b * f.dpy - c * nv / k;
+  return dot(w, w) > 1e-30 ? normalize(w) : vec3(0.0);
+}
+float fnvHairSelfShadow(FnvHairFrame f, vec3 lightDir) {
+  if (fnvAo[0].x == 0.0 || fnvAo[0].y == 0.0) return 1.0;
+  const vec3 l = fnvHairToView(f, lightDir) * max(kHairSelfShadowScale * 1.428, 0.05);
+  if (dot(l, l) == 0.0) return 1.0;
+  const float noise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+  const float stepSize = 0.25;
+  vec3 ray = f.p + l * ((noise - 0.5) * 2.0 * stepSize);
+  const vec4 pf = fnvAo[7], pr = fnvAo[8];
+  int hits = 0;
+  for (int i = 0; i < 4; i++) {
+    ray += l * stepSize;
+    const vec3 q = vec3(dot(fnvAo[4].xyz, ray) + fnvAo[4].w, dot(fnvAo[5].xyz, ray) + fnvAo[5].w,
+                        dot(fnvAo[6].xyz, ray) + fnvAo[6].w);
+    if (q.z <= 0.0) continue;
+    const vec2 uv = vec2((q.x / q.z - pf.x) / (pf.y - pf.x), (q.y / q.z - pf.z) / (pf.w - pf.z));
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0)))) continue;
+    // Nearer than the ray (log2 distances; 0.002: the published depth's precision, about 0.14%).
+    if (fnvPublishedDepth(false, ivec2(pr.xy + uv * pr.zw)) < log2(q.z) - 0.002) hits++;
+  }
+  const float shadow = hits > 0 ? 1.0 - pow(float(hits) / 4.0, kHairSelfShadowExponent) : 1.0;
+  return mix(1.0, shadow, kHairSelfShadowStrength);
+}
+#else
+struct FnvHairFrame { vec3 p; };
+FnvHairFrame fnvHairFrame(vec3 position) { FnvHairFrame f; f.p = vec3(0.0); return f; }
+float fnvHairSelfShadow(FnvHairFrame f, vec3 lightDir) { return 1.0; }
+#endif
+#endif
 #if defined(FNV_WET) && defined(FNV_FRAME)
 // Wet world on objects (docs/WETWORLD.md), in the object lighting shaders' tangent space with their vertex shaders'
 // frame: fnvWetObjectBegin before the lights (it flattens the shading normal n, tangent space, under standing water and
@@ -1144,6 +1309,15 @@ std::vector<Replacement> loadReplacements(const std::string& dir, const std::str
           for (char c : value) valueOk = valueOk && (isalnum(uint8_t(c)) || c == '_' || c == '.');
           if (!validIdentifier(name) || !valueOk) { r.error = sec + ": define '" + d + "' is not NAME or NAME=VALUE"; break; }
           t.defines.push_back(d);
+        }
+        std::string game = iniString(ini, sec.c_str(), "GameConstants");
+        for (char& c : game) if (c == ',') c = ' ';
+        std::stringstream gs(game);
+        for (std::string g; r.error.empty() && gs >> g;) {  // float register numbers, 0..223
+          char* end = nullptr;
+          const unsigned long reg = strtoul(g.c_str(), &end, 10);
+          if (!end || *end || reg >= 224) r.error = sec + ": GameConstants '" + g + "' is not a register 0..223";
+          else t.gameConstants.push_back(uint32_t(reg));
         }
         if (t.source.empty()) r.error = sec + ": no Source";
         if (!r.error.empty()) break;

@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdio>
 #include <cstring>
@@ -54,6 +55,15 @@ bool readsViewVector() {
   return false;
 }
 
+bool readsLighting30EyePosition() {
+  for (const fx::Replacement& r : g_list)
+    if (r.enabled && r.error.empty())
+      for (const fx::Replacement::Target& t : r.targets)
+        if (t.shader.rfind("SM3", 0) == 0 && std::find(t.gameConstants.begin(), t.gameConstants.end(), 1u) != t.gameConstants.end())
+          return true;
+  return false;
+}
+
 void load() {
   g_ini = iniPath();
   g_dir = moduleDir() + "fnv_vk\\replacements";
@@ -72,32 +82,42 @@ void load() {
   g_active.assign(g_list.size(), false);
 }
 
-// The skin's detail normal map (docs/SKIN.md), shipped with the lighting replacement: uploaded once while the lighting
-// replaces the game's shaders; the skin builds sample it (binding 59). Without the file they keep the normal map alone.
+// A block-compressed DDS shipped in the lighting replacement's folder, uploaded under `key`; false (logged) without it.
+bool uploadLightingTexture(Backend* be, const char* file, uint32_t formats, TexKey key, const char* what) {
+  const std::string path = g_dir + "\\lighting\\" + file;
+  std::ifstream in(path, std::ios::binary);
+  if (!in) {
+    logf("%s: none (%s)", what, path.c_str());
+    return false;
+  }
+  const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  d3dx::Texture t;
+  std::string why;
+  if (!bcDdsTexture(bytes.data(), bytes.size(), formats, t, &why)) {
+    logf("%s: %s is not usable: %s", what, path.c_str(), why.c_str());
+    return false;
+  }
+  if (!be->createTexture(key, t)) {
+    logf("%s: %ux%u, %u levels, was NOT uploaded", what, t.width, t.height, t.levels);
+    return false;
+  }
+  logf("%s: %ux%u, %u levels", what, t.width, t.height, t.levels);
+  return true;
+}
+
+// The maps shipped with the lighting replacement, uploaded once while the lighting replaces the game's shaders: the
+// skin's detail normal map (docs/SKIN.md; binding 59: without it the skin keeps the normal map alone) and the hair's
+// tangent shift map (docs/LIGHTING.md "Hair"; binding 63: without it the strands are not shifted).
 void onBackendReady(Backend* be) {
   bool lighting = false;
   for (const fx::Replacement& r : g_list) lighting = lighting || (r.id == "lighting" && r.enabled && r.error.empty());
   if (!lighting) return;
-  const std::string path = g_dir + "\\lighting\\skin_detail_n.dds";
-  std::ifstream in(path, std::ios::binary);
-  if (!in) {
-    logf("skin: no detail normal map (%s)", path.c_str());
-    return;
-  }
-  const std::vector<uint8_t> file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-  d3dx::Texture t;
-  std::string why;
   constexpr TexKey kSkinDetailKey = TexKey(~uintptr_t(0) - 0x5F);
-  if (!bc5DdsTexture(file.data(), file.size(), t, &why)) {
-    logf("skin: the detail normal map %s is not usable: %s", path.c_str(), why.c_str());
-    return;
-  }
-  if (!be->createTexture(kSkinDetailKey, t)) {
-    logf("skin: the detail normal map (%ux%u, %u levels) was NOT uploaded", t.width, t.height, t.levels);
-    return;
-  }
-  be->setSkinDetail(kSkinDetailKey);
-  logf("skin: detail normal map %ux%u, %u levels", t.width, t.height, t.levels);
+  constexpr TexKey kHairShiftKey = TexKey(~uintptr_t(0) - 0x60);
+  if (uploadLightingTexture(be, "skin_detail_n.dds", kBcDdsBC5, kSkinDetailKey, "skin detail normal map"))
+    be->setSkinDetail(kSkinDetailKey);
+  if (uploadLightingTexture(be, "hair_tangent_shift.dds", kBcDdsBC4, kHairShiftKey, "hair tangent shift map"))
+    be->setHairShift(kHairShiftKey);
 }
 
 void fillConfig(BackendConfig& cfg) {
@@ -115,6 +135,7 @@ void fillConfig(BackendConfig& cfg) {
         memcpy(sr.md5, m.b.data(), 16);
         sr.spv = t.spv;
         sr.constants = constants;
+        sr.gameConstants = t.gameConstants;
         cfg.shaderReplacements.push_back(std::move(sr));
         std::array<uint8_t, 16> a;
         memcpy(a.data(), m.b.data(), 16);

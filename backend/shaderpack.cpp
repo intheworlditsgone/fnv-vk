@@ -231,7 +231,8 @@ bool spvColourVariant(const uint32_t* spv, size_t words, std::vector<uint32_t>& 
   return true;
 }
 
-bool ShaderPack::replace(const Md5& md5, std::vector<uint32_t> spv, const std::vector<PackedShader::Def>& extraDefs) {
+bool ShaderPack::replace(const Md5& md5, std::vector<uint32_t> spv, const std::vector<PackedShader::Def>& extraDefs,
+                         const std::vector<uint32_t>& gameConstants) {
   PackedShader* p = findMutable(md5);
   if (!p || spv.empty() || spv[0] != 0x07230203u) return false;
   // What the replacement binds (not what the translation it replaces bound): uniform blocks 0..8, and the 2D or cube
@@ -245,7 +246,7 @@ bool ShaderPack::replace(const Md5& md5, std::vector<uint32_t> spv, const std::v
   // "Environment").
   uint32_t cbv = 0, tex = 0, cube = 0;
   bool sunImage = false, envImage = false, aoImage = false, puddleImage = false, skinImage = false, skinSampler = false;
-  bool skinStore = false;
+  bool skinStore = false, hairImage = false, hairSampler = false;
   for (const auto& [set, b, isCube] : bindings) {
     if (set != stageSet) return false;  // the other stage's set: not this shader's interface
     if (b <= 8) cbv |= 1u << b;
@@ -263,6 +264,8 @@ bool ShaderPack::replace(const Md5& md5, std::vector<uint32_t> spv, const std::v
     else if (b == 60 && p->pixel) skinSampler = true;
     else if (b == 13 && p->pixel) cbv |= 1u << b;
     else if ((b == 61 || b == 62) && p->pixel) skinStore = true;
+    else if (b == 63 && p->pixel) hairImage = true;
+    else if (b == 64 && p->pixel) hairSampler = true;
     else return false;
   }
   if (aoImage != ((cbv >> 11) & 1u)) return false;  // the AO block and its image come together
@@ -272,9 +275,11 @@ bool ShaderPack::replace(const Md5& md5, std::vector<uint32_t> spv, const std::v
   if (envImage != ((cbv >> 10) & 1u)) return false;  // the block and the cube come together
   if (skinImage != skinSampler) return false;  // the detail map comes with its sampler
   if (skinStore != ((cbv >> 13) & 1u)) return false;  // the skin buffer's images come with its block
+  if (hairImage != hairSampler) return false;  // the tangent shift map comes with its sampler
   p->cbvMask = cbv;
   p->skinDetail = skinImage;
   p->skinStore = skinStore;
+  p->hairShift = hairImage;
   p->textureMask = tex;
   p->textures.clear();
   for (uint32_t s = 0; s < 16; s++)
@@ -284,6 +289,9 @@ bool ShaderPack::replace(const Md5& md5, std::vector<uint32_t> spv, const std::v
   p->spvBytes = uint32_t(replacements_.back().size() * 4);
   p->constAll = !spvConstantRuns(p->spv, p->spvBytes / 4, stageSet, p->pixel ? 224 : 256, p->constRuns);
   spvTraits(*p);
+  for (uint32_t reg : gameConstants)
+    p->defs.erase(std::remove_if(p->defs.begin(), p->defs.end(), [reg](const PackedShader::Def& d) { return d.reg == reg; }),
+                  p->defs.end());
   for (const PackedShader::Def& d : extraDefs) {
     bool found = false;
     for (PackedShader::Def& own : p->defs)

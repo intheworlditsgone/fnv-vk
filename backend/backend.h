@@ -87,6 +87,7 @@ struct ShaderReplacement {
   std::vector<uint32_t> spv;
   struct Constant { uint32_t reg; float v[4]; };
   std::vector<Constant> constants;
+  std::vector<uint32_t> gameConstants;  // float registers the replacement reads as the game set them (no original def)
 };
 
 struct BackendConfig {
@@ -406,6 +407,9 @@ public:
   // Skin (docs/SKIN.md): the detail normal map pixel replacements that declare it (FNV_SKIN: 59 with its sampler 60)
   // sample, tiled over the skin. 0: none (a flat normal is bound).
   void setSkinDetail(TexKey key);
+  // Hair (docs/LIGHTING.md "Hair"): the tangent shift map pixel replacements that declare it (FNV_HAIR: 63 with its
+  // sampler 64) sample. 0: none (the zero dummy is bound: no shift).
+  void setHairShift(TexKey key);
   // The skin buffer (docs/SKIN.md "Subsurface scattering"): while active (the main world's opaque pass), pixel
   // replacements that declare it (FNV_SKIN: block 13, storage images 61 / 62) write each skin pixel's albedo and the
   // nearest skin depth there; effects read both (fnvSkinAt). Activating sizes it to the current target and clears it.

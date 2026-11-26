@@ -17,6 +17,7 @@ namespace fnvvk::replacements {
 std::vector<fx::Replacement>& list();
 bool active(const fx::Replacement& r);           // replacing its shaders in this session
 bool readsViewVector();                          // after load(): an enabled replacement reads the view vector (location 12)
+bool readsLighting30EyePosition();               // after load(): an enabled Lighting30 (SM3) replacement takes c1 from the game
 void load();                                     // at plugin load
 void fillConfig(BackendConfig& cfg);             // before backend init
 void onBackendReady(Backend* be);                // after backend init: the lighting's skin detail map (docs/SKIN.md)

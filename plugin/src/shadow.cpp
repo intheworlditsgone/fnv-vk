@@ -453,6 +453,7 @@ bool installHooks() {
       ok &= upscale::install();
       replacements::load();
       ok &= viewvector::install(replacements::readsViewVector());
+      ok &= viewvector::installLighting30(replacements::readsLighting30EyePosition());
       sunshadows::install();
       ok &= envprobe::install();
     }

@@ -29,6 +29,11 @@ Ported (both GPL-3.0, so the ported code is under GPL-3.0 here as well):
   `src/Features/Skin/Material/Parameters.def`): the skin model in backend/effectlib.cpp (FNV_SKIN) is a GLSL port with
   their constants, and its detail normal map `replacements/lighting/skin_detail_n.dds` is their
   `features/Skin/Shaders/Skin/skin_detail_n.dds`, unchanged.
+- **Community Shaders' Hair Specular** (GPL-3.0; `features/Hair Specular/Shaders/Hair/Hair.hlsli`,
+  `package/Shaders/Lighting.hlsl` CS_HAIR_SHADING, `Common/LightDisk.hlsli`, the defaults in
+  `src/Features/HairSpecular.h`): the hair model in backend/effectlib.cpp (FNV_HAIR) is a GLSL port with their constants,
+  and its tangent shift map `replacements/lighting/hair_tangent_shift.dds` is their
+  `features/Hair Specular/Shaders/Hair/TangentShift.dds`, unchanged.
 - **Community Shaders' Grass Lighting** (GPL-3.0; `features/Grass Lighting/Shaders/GrassLighting/GrassLighting.hlsli`,
   `package/Shaders/RunGrass.hlsl`, `Common/PBRMath.hlsli`, the defaults in `src/Features/GrassLighting.h`): the grass model
   in replacements/lighting/grass.frag and the clump and canopy terms of sdp2spv's grass pass are ports of it.

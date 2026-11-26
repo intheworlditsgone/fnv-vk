@@ -23,6 +23,7 @@ struct PackedShader {
   uint32_t textureMask = 0;   // sampler registers with image binding 16+s / sampler binding 32+s
   bool skinDetail = false;    // the skin's detail normal map (59) and its sampler (60)
   bool skinStore = false;     // the skin buffer (block 13, storage images 61 / 62)
+  bool hairShift = false;     // the hair's tangent shift map (63) and its sampler (64)
   // Pixel shaders (spvPixelTraits): kills pixels other than by the alpha test (D3D9 texkill, a replacement's own
   // discard), or writes depth. Either keeps its draws out of the depth pre-pass (backend_draw.inl).
   bool discards = false, writesDepth = false;
@@ -60,8 +61,10 @@ public:
   PackedShader* findMutable(const Md5& md5);
   size_t size() const { return shaders_.size(); }
   // Shader replacement: `md5`'s module becomes `spv` (same interface: the bindings and texture registers of the
-  // translation, a subset of them used), and `extraDefs` are overlaid on its float constants like its own `def`s.
-  bool replace(const Md5& md5, std::vector<uint32_t> spv, const std::vector<PackedShader::Def>& extraDefs);
+  // translation, a subset of them used), and `extraDefs` are overlaid on its float constants like its own `def`s; its
+  // own defs at the registers in `gameConstants` are dropped (the replacement reads what the game set there).
+  bool replace(const Md5& md5, std::vector<uint32_t> spv, const std::vector<PackedShader::Def>& extraDefs,
+               const std::vector<uint32_t>& gameConstants = {});
 
 private:
   std::vector<uint8_t> blob_;

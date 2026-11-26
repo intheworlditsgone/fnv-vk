@@ -206,6 +206,23 @@ void __fastcall hkGrassSetup(void* self, void* edx, void* state) {
   set(device, kFrameRegister, c, 1);
 }
 
+// Lighting30Shader's per-pass pixel constant masks (.data 0x01200868, one per pass-table index, 112 up to the vertex
+// masks at 0x01200A28). Lighting30Shader::SetupPassConstants (0x00BBE120) maps the pass to its index and sets each
+// entry of the pixel constant map on or off from bit i + 1 (entries in the order Lighting30Shader::CreateConstantMaps
+// 0x00BBF5A0 registers them: ambientcolor, eyepos, hairtint, matalpha, matemit, refractpower, parallaxdata, waterfog,
+// envmaptoggles, lightdata). With eyepos on, UpdateTransformedPosition (0x00BBB890) computes it per geometry (the
+// camera in the space of the shader's position input) and the map uploads it to c1.
+uint32_t* const kLighting30PixelFlags = reinterpret_cast<uint32_t*>(0x01200868);
+constexpr uint32_t kLighting30Entries = (0x01200A28 - 0x01200868) / 4;
+constexpr uint32_t kL30EyePos = 1u << 2, kL30LightData = 1u << 10;
+using L30SetupPassFn = void(__fastcall*)(void* self, void* edx, int pass);
+L30SetupPassFn oL30SetupPass = nullptr;
+void __fastcall hkL30SetupPass(void* self, void* edx, int pass) {
+  for (uint32_t i = 0; i < kLighting30Entries; i++)
+    if (kLighting30PixelFlags[i] & kL30LightData) kLighting30PixelFlags[i] |= kL30EyePos;
+  oL30SetupPass(self, edx, pass);
+}
+
 }  // namespace
 
 void beginWorld() {
@@ -229,6 +246,11 @@ bool install(bool needed) {
              "ShadowLightShader::SetupGeometryConstants (tangent-to-world frame, skinned)");
   ok &= hook(0x00BAC9C0, &hkGrassSetup, &oGrassSetup, "TallGrassShader::SetupGeometryConstants (the grass's canopy height)");
   return ok;
+}
+
+bool installLighting30(bool needed) {
+  if (!needed) return true;
+  return hook(0x00BBE120, &hkL30SetupPass, &oL30SetupPass, "Lighting30Shader::SetupPassConstants (eyepos for the hair)");
 }
 
 }  // namespace fnvvk::viewvector

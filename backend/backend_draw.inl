@@ -378,6 +378,7 @@ static constexpr uint32_t kWetBlockBinding = 12, kPuddleImageBinding = 56, kPudd
                           kPuddleLevelsBinding = 58;
 static constexpr uint32_t kSkinDetailBinding = 59, kSkinDetailSamplerBinding = 60;
 static constexpr uint32_t kSkinBlockBinding = 13, kSkinAlbedoBinding = 61, kSkinDepthBinding = 62;
+static constexpr uint32_t kHairShiftBinding = 63, kHairShiftSamplerBinding = 64;
 static constexpr uint32_t kZeroBinding = 15;  // vertex binding for inputs the declaration does not provide
 
 bool initDrawPath() {
@@ -417,6 +418,8 @@ bool initDrawPath() {
       b.push_back({ kSkinBlockBinding, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, stage, nullptr });
       b.push_back({ kSkinAlbedoBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, stage, nullptr });
       b.push_back({ kSkinDepthBinding, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, stage, nullptr });
+      b.push_back({ kHairShiftBinding, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, stage, nullptr });
+      b.push_back({ kHairShiftSamplerBinding, VK_DESCRIPTOR_TYPE_SAMPLER, 1, stage, nullptr });
     }
     VkDescriptorSetLayoutCreateInfo ci{ VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     ci.bindingCount = uint32_t(b.size());
@@ -517,7 +520,7 @@ bool initDrawPath() {
       memcpy(md5.b.data(), r.md5, 16);
       std::vector<PackedShader::Def> defs;
       for (const ShaderReplacement::Constant& c : r.constants) defs.push_back({ c.reg, { c.v[0], c.v[1], c.v[2], c.v[3] } });
-      if (pack.replace(md5, r.spv, defs)) replaced++;
+      if (pack.replace(md5, r.spv, defs, r.gameConstants)) replaced++;
     }
     if (!cfg.shaderReplacements.empty())
       logf("shader replacements: %u of %zu applied", replaced, cfg.shaderReplacements.size());
@@ -626,8 +629,8 @@ VkDescriptorSet allocSet(uint32_t set) {
       VkDescriptorPoolSize sizes[] = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSetsPerPool * (kUboBindings + 4) },  // + environment, AO, wet, skin blocks
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSetsPerPool * 2 },                     // the skin buffer
-        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSetsPerPool * (kTexBindings + 8) },  // + sun cascades, environment, AO, GI, GI depth, puddles x2, skin detail
-        { VK_DESCRIPTOR_TYPE_SAMPLER, kSetsPerPool * (kTexBindings + 5) },
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kSetsPerPool * (kTexBindings + 9) },  // + sun cascades, environment, AO, GI, GI depth, puddles x2, skin detail, hair shift
+        { VK_DESCRIPTOR_TYPE_SAMPLER, kSetsPerPool * (kTexBindings + 6) },
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kSetsPerPool },
       };
       VkDescriptorPoolCreateInfo ci{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
@@ -2061,6 +2064,7 @@ void doSetSkinBuffer(bool on) {
 bool wetLightingSet = false;
 Backend::WetLighting wetLighting{};
 TexKey skinDetail = 0;  // setSkinDetail
+TexKey hairShift = 0;   // setHairShift
 void wetBlock(float blk[kWetBlockVec4s][4], VkImageView& puddleView, VkImageView& levelsView) {
   memset(blk, 0, sizeof(float) * 4 * kWetBlockVec4s);
   puddleView = levelsView = VK_NULL_HANDLE;
@@ -3192,6 +3196,18 @@ void doDraw(const DrawSetup& ds, uint32_t pt, uint32_t prims, bool indexed, int3
     kss[D3DSAMP_MAGFILTER] = kss[D3DSAMP_MINFILTER] = kss[D3DSAMP_MIPFILTER] = D3DTEXF_LINEAR;
     skinSamplerInfo = { samplerFor(kss, false), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED };
   }
+  // The hair's tangent shift map: tiled (wrap), linear; without one, the dummy (the shader reads it as no shift).
+  const bool hairLit = psh->hairShift;
+  VkDescriptorImageInfo hairImage{ VK_NULL_HANDLE, dummyView[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+  VkDescriptorImageInfo hairSamplerInfo{};
+  if (hairLit) {
+    auto shift = hairShift ? textures.find(hairShift) : textures.end();
+    if (shift != textures.end() && shift->second.view) hairImage.imageView = shift->second.view;
+    uint32_t kss[14] = {};
+    kss[D3DSAMP_ADDRESSU] = kss[D3DSAMP_ADDRESSV] = kss[D3DSAMP_ADDRESSW] = D3DTADDRESS_WRAP;
+    kss[D3DSAMP_MAGFILTER] = kss[D3DSAMP_MINFILTER] = kss[D3DSAMP_MIPFILTER] = D3DTEXF_LINEAR;
+    hairSamplerInfo = { samplerFor(kss, false), VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED };
+  }
   const bool aoLit = (psh->cbvMask & (1u << kAoBlockBinding)) != 0;
   VkDescriptorBufferInfo aoUbo{};
   VkDescriptorImageInfo aoImage{ VK_NULL_HANDLE, dummyView[0], VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
@@ -3228,7 +3244,7 @@ void doDraw(const DrawSetup& ds, uint32_t pt, uint32_t prims, bool indexed, int3
   }
 
   VkDescriptorSet sets[kSets];
-  VkWriteDescriptorSet writes[kSets * (kUboBindings + 2 * kTexBindings) + 19];
+  VkWriteDescriptorSet writes[kSets * (kUboBindings + 2 * kTexBindings) + 21];
   uint32_t nw = 0;
   // The constant blocks as written into the sets: offset 0, the slice's offset is the dynamic offset at bind time.
   const VkDescriptorBufferInfo constInfo[kSets] = { { ubo[0][0].buffer, 0, ubo[0][0].range },
@@ -3269,6 +3285,7 @@ void doDraw(const DrawSetup& ds, uint32_t pt, uint32_t prims, bool indexed, int3
       sig[n++] = uint64_t(puddleLevels.imageView);
     }
     if (set == 1 && skinLit) sig[n++] = uint64_t(skinImage.imageView);
+    if (set == 1 && hairLit) sig[n++] = uint64_t(hairImage.imageView);
     if (set == 1 && skinStore) {
       sig[n++] = uint64_t(skinUbo.buffer) ^ (uint64_t(skinUbo.offset) << 40);
       sig[n++] = uint64_t(skinAlbedoInfo.imageView);
@@ -3382,6 +3399,20 @@ void doDraw(const DrawSetup& ds, uint32_t pt, uint32_t prims, bool indexed, int3
       ws.dstBinding = kSkinDetailSamplerBinding;
       ws.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
       ws.pImageInfo = &skinSamplerInfo;
+    }
+    if (set == 1 && hairLit) {
+      VkWriteDescriptorSet& wi = writes[nw++];
+      wi = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+      wi.dstSet = sets[set];
+      wi.dstBinding = kHairShiftBinding;
+      wi.descriptorCount = 1;
+      wi.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+      wi.pImageInfo = &hairImage;
+      VkWriteDescriptorSet& ws = writes[nw++];
+      ws = wi;
+      ws.dstBinding = kHairShiftSamplerBinding;
+      ws.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+      ws.pImageInfo = &hairSamplerInfo;
     }
     if (set == 1 && skinStore) {
       VkWriteDescriptorSet& wb = writes[nw++];

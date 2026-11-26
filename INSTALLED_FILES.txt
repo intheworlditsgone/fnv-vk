@@ -15,7 +15,8 @@ fnv_vk plugin (built from plugin/):
   Data\NVSE\Plugins\fnv_vk_pipelines.bin   (written by the plugin: recorded pipelines + driver pipeline cache)
   Data\NVSE\Plugins\fnv_vk\effects\<id>\   (effects: effect.ini + GLSL passes; copied from effects/)
   Data\NVSE\Plugins\fnv_vk\replacements\<id>\   (shader replacements: replace.ini + GLSL; the lighting's also
-    skin_detail_n.dds, the skin's detail normal map; copied from replacements/)
+    skin_detail_n.dds, the skin's detail normal map, and hair_tangent_shift.dds, the hair's tangent shift map;
+    copied from replacements/)
   Data\NVSE\Plugins\fnv_vk\cache\   (written by the plugin: compiled effect shaders)
   Data\NVSE\Plugins\fnv_vk_menu.ini   (written by the plugin: menu window positions)
   Data\NVSE\Plugins\fnv_vk\LICENSE.txt   (GPL-3.0: the licence fnv_vk is distributed under)

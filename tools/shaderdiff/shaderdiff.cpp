@@ -654,6 +654,16 @@ public:
       std::memcpy(m_staging.map, zero.data(), zero.size() * 4);
       uploadImage(skinImage, 1);
     }
+    // Hair (replacements with FNV_HAIR: the tangent shift map 63 and its sampler 64): a zero image, which the shader
+    // reads as no shift (docs/LIGHTING.md "Hair").
+    const bool hairLit = std::find(job.cbvs.begin(), job.cbvs.end(), 63u) != job.cbvs.end();
+    Image hairImage{};
+    if (hairLit) {
+      hairImage = createImage(VK_FORMAT_B8G8R8A8_UNORM, TEX, TEX, 1, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, false);
+      std::vector<uint32_t> zero(size_t(TEX) * TEX, 0u);
+      std::memcpy(m_staging.map, zero.data(), zero.size() * 4);
+      uploadImage(hairImage, 1);
+    }
     // The skin buffer (FNV_SKIN: block 13 with the storage images 61 / 62): the block zero, so nothing is written; the
     // images real storage images of the shader's formats.
     const bool skinStore = std::find(job.cbvs.begin(), job.cbvs.end(), 13u) != job.cbvs.end();
@@ -701,7 +711,7 @@ public:
 
     // Descriptor set 1 (pixel stage) from the shader's reflected bindings.
     std::vector<VkDescriptorSetLayoutBinding> lb;
-    for (uint32_t b : job.cbvs)  // the blocks (59 in the list is the skin's detail map, below)
+    for (uint32_t b : job.cbvs)  // the blocks (59 and 63 in the list are the skin's detail map and the hair's shift map, below)
       if (b < 16) lb.push_back({ b, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr });
     for (auto [reg, kind] : job.textures) {
       lb.push_back({ 16 + reg, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr });
@@ -733,6 +743,10 @@ public:
     if (skinLit) {
       lb.push_back({ 59, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr });
       lb.push_back({ 60, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr });
+    }
+    if (hairLit) {
+      lb.push_back({ 63, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr });
+      lb.push_back({ 64, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr });
     }
     VkDescriptorSetLayoutCreateInfo dli = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
     dli.bindingCount = uint32_t(lb.size()); dli.pBindings = lb.data();
@@ -834,6 +848,16 @@ public:
       w.dstBinding = 60; w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w.pImageInfo = &imgInfos.back();
       writes.push_back(w);
     }
+    if (hairLit) {
+      imgInfos.push_back({ VK_NULL_HANDLE, hairImage.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
+      VkWriteDescriptorSet w = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
+      w.dstSet = set; w.dstBinding = 63; w.descriptorCount = 1; w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+      w.pImageInfo = &imgInfos.back();
+      writes.push_back(w);
+      imgInfos.push_back({ m_sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED });
+      w.dstBinding = 64; w.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER; w.pImageInfo = &imgInfos.back();
+      writes.push_back(w);
+    }
     if (envLit) {
       imgInfos.push_back({ VK_NULL_HANDLE, envCube.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL });
       VkWriteDescriptorSet w = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET };
@@ -905,6 +929,7 @@ public:
     if (aoLit) destroyImage(aoImage);
     if (wetLit) destroyImage(wetImage);
     if (skinLit) destroyImage(skinImage);
+    if (hairLit) destroyImage(hairImage);
     if (skinStore) { destroyImage(skinAlbedoImg); destroyImage(skinDepthImg); }
     destroyImage(sunMap);
     return out;

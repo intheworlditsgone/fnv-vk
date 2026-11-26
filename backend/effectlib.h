@@ -70,6 +70,7 @@ struct Effect {
 //   [Replacement]         Name=, Description=
 //   [Param.<name>]        as for effects (at most 32); parameter i is float constant c(223 - i), x component
 //   [Shader.<game name>]  Source=<file>, Defines=A B C     (game name as in the shader packages, e.g. WATER000.pso)
+//                         GameConstants=1 2               (registers read as the game set them, not the original's def)
 struct Replacement {
   std::string id, name, description;
   bool enabled = true;
@@ -78,6 +79,7 @@ struct Replacement {
   struct Target {
     std::string shader, source;
     std::vector<std::string> defines;
+    std::vector<uint32_t> gameConstants;  // float registers where the original's def is not overlaid
     std::vector<uint32_t> spv;
   };
   std::vector<Target> targets;

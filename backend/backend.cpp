@@ -1539,7 +1539,9 @@ struct Backend::Impl {
     VkComponentMapping swizzle{ VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
                                 VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY };
   };
-  // Two-channel block compression as FOURCCs (DDS files written for D3D9 drivers' BC5 support; the game uses none).
+  // One- and two-channel block compression as FOURCCs (DDS files written for D3D9 drivers' BC4 / BC5 support; the game
+  // uses none).
+  static constexpr uint32_t kFourccBC4U = 0x55344342, kFourccATI1 = 0x31495441;
   static constexpr uint32_t kFourccBC5U = 0x55354342, kFourccATI2 = 0x32495441;
   // D3DFORMAT -> Vulkan format + view swizzle reproducing what D3D9 samples.
   static TexFormat texFormatFor(uint32_t d3dFmt) {
@@ -1550,6 +1552,8 @@ struct Backend::Impl {
       case d3dx::kFmtDXT5: f.format = VK_FORMAT_BC3_UNORM_BLOCK; break;
       case kFourccBC5U:
       case kFourccATI2: f.format = VK_FORMAT_BC5_UNORM_BLOCK; break;  // two-channel normal maps (the skin's detail)
+      case kFourccBC4U:
+      case kFourccATI1: f.format = VK_FORMAT_BC4_UNORM_BLOCK; break;  // one-channel data (the hair's tangent shift)
       case d3dx::kFmtA8R8G8B8: f.format = VK_FORMAT_B8G8R8A8_UNORM; break;
       case d3dx::kFmtX8R8G8B8:
         f.format = VK_FORMAT_B8G8R8A8_UNORM;
@@ -1868,7 +1872,8 @@ struct Backend::Impl {
     if (!beginFrameIfNeeded()) return false;
     uint32_t w = std::max(t.width >> level, 1u), h = std::max(t.height >> level, 1u);
     bool bc = t.format == VK_FORMAT_BC1_RGBA_UNORM_BLOCK || t.format == VK_FORMAT_BC2_UNORM_BLOCK ||
-              t.format == VK_FORMAT_BC3_UNORM_BLOCK || t.format == VK_FORMAT_BC5_UNORM_BLOCK;
+              t.format == VK_FORMAT_BC3_UNORM_BLOCK || t.format == VK_FORMAT_BC4_UNORM_BLOCK ||
+              t.format == VK_FORMAT_BC5_UNORM_BLOCK;
     uint32_t texel = 4;
     switch (t.format) {
       case VK_FORMAT_B4G4R4A4_UNORM_PACK16: case VK_FORMAT_R5G6B5_UNORM_PACK16: texel = 2; break;
@@ -1876,7 +1881,8 @@ struct Backend::Impl {
       case VK_FORMAT_R32G32B32A32_SFLOAT: texel = 16; break;
       default: break;
     }
-    VkDeviceSize size = bc ? VkDeviceSize((w + 3) / 4) * ((h + 3) / 4) * (t.format == VK_FORMAT_BC1_RGBA_UNORM_BLOCK ? 8 : 16)
+    VkDeviceSize size = bc ? VkDeviceSize((w + 3) / 4) * ((h + 3) / 4) *
+                                 (t.format == VK_FORMAT_BC1_RGBA_UNORM_BLOCK || t.format == VK_FORMAT_BC4_UNORM_BLOCK ? 8 : 16)
                            : VkDeviceSize(w) * h * texel;
     VkBufferCreateInfo bci{ VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
     bci.size = size;
@@ -3005,6 +3011,12 @@ void Backend::setSkinDetail(TexKey key) {
   m->post([this, key] {
     std::lock_guard<std::mutex> lock(m->mutex);
     m->skinDetail = key;
+  });
+}
+void Backend::setHairShift(TexKey key) {
+  m->post([this, key] {
+    std::lock_guard<std::mutex> lock(m->mutex);
+    m->hairShift = key;
   });
 }
 void Backend::setWetLighting(const WetLighting* w) {
