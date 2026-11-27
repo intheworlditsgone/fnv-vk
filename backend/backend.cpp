@@ -1548,7 +1548,11 @@ struct Backend::Impl {
     TexFormat f;
     switch (d3dFmt) {
       case d3dx::kFmtDXT1: f.format = VK_FORMAT_BC1_RGBA_UNORM_BLOCK; break;  // 3-colour blocks: index 3 = (0,0,0,0)
+      // DXT2/DXT4 are DXT3/DXT5 blocks whose colour is premultiplied by alpha: D3D9 samples the stored values as they
+      // are, so they decode identically (the plugin's device reports them as texture formats).
+      case d3dx::kFmtDXT2:
       case d3dx::kFmtDXT3: f.format = VK_FORMAT_BC2_UNORM_BLOCK; break;
+      case d3dx::kFmtDXT4:
       case d3dx::kFmtDXT5: f.format = VK_FORMAT_BC3_UNORM_BLOCK; break;
       case kFourccBC5U:
       case kFourccATI2: f.format = VK_FORMAT_BC5_UNORM_BLOCK; break;  // two-channel normal maps (the skin's detail)

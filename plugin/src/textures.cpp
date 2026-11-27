@@ -30,6 +30,7 @@ struct Counters {
   std::atomic<uint64_t> bytesCompared{ 0 }, bytesIdentical{ 0 }, bytesMismatch{ 0 };
   std::atomic<uint64_t> nativeOk{ 0 }, nativeUnsupported{ 0 }, nativeOtherError{ 0 };
   std::atomic<uint64_t> placeholders{ 0 };
+  std::atomic<uint64_t> fromD3DX{ 0 }, fromD3DXFailed{ 0 };
   std::atomic<uint64_t> verified{ 0 }, verifyIdentical{ 0 }, verifyMismatch{ 0 }, verifySkipped{ 0 };
   std::atomic<uint64_t> uploaded{ 0 }, uploadFailed{ 0 }, destroyed{ 0 };
 } g_c;
@@ -206,6 +207,88 @@ bool compareWithD3D(IDirect3DBaseTexture9* base, const d3dx::Texture& t, char* w
                     l, d.Width, d.Height, unsigned(d.Format), nl.width, nl.height, t.format, int(badRow));
         return false;
       }
+    }
+  return true;
+}
+
+// Tight layout of one level of a format the backend uploads (backend.cpp texFormatFor): bytes per row of texels (per
+// row of 4x4 blocks for block formats) and the row count. False for formats the backend has no mapping for.
+bool levelLayout(uint32_t fmt, uint32_t w, uint32_t h, uint32_t& rowPitch, uint32_t& rows) {
+  uint32_t block = 0, texel = 0;
+  switch (fmt) {
+    case D3DFMT_DXT1: block = 8; break;
+    case D3DFMT_DXT2: case D3DFMT_DXT3: case D3DFMT_DXT4: case D3DFMT_DXT5: block = 16; break;
+    case D3DFMT_A8R8G8B8: case D3DFMT_X8R8G8B8: case D3DFMT_R32F: texel = 4; break;
+    case D3DFMT_R5G6B5: case D3DFMT_A4R4G4B4: texel = 2; break;
+    case D3DFMT_A16B16G16R16F: texel = 8; break;
+    case D3DFMT_A32B32G32R32F: texel = 16; break;
+    default: return false;
+  }
+  if (block) {
+    rowPitch = std::max(1u, (w + 3) / 4) * block;
+    rows = std::max(1u, (h + 3) / 4);
+  } else {
+    rowPitch = w * texel;
+    rows = h;
+  }
+  return true;
+}
+
+// D3DX's own result, read back from the texture it created. This is the content for every file the native decoder
+// does not reproduce: other containers D3DX accepts under a .dds name (TGA, PNG, BMP, JPG: D3DX detects the type from
+// the data), pixel formats without a native codec, sizes D3DX rescales, partial cube maps. With D3D9 the texture is
+// the managed one D3DX filled; in native mode it is a gbsurfaces object on the plugin's device, whose levels hold what
+// D3DX wrote through LockRect, in one of the formats that device reports as supported (the backend's set).
+bool readBackD3DX(IDirect3DBaseTexture9* base, d3dx::Texture& t, char* why, size_t whyLen) {
+  const D3DRESOURCETYPE type = base->GetType();
+  if (type != D3DRTYPE_TEXTURE && type != D3DRTYPE_CUBETEXTURE) {
+    _snprintf_s(why, whyLen, _TRUNCATE, "resource type %d", int(type));
+    return false;
+  }
+  const bool cube = type == D3DRTYPE_CUBETEXTURE;
+  auto* tex2d = static_cast<IDirect3DTexture9*>(base);
+  auto* texCube = static_cast<IDirect3DCubeTexture9*>(base);
+  D3DSURFACE_DESC d0{};
+  if (FAILED(cube ? texCube->GetLevelDesc(0, &d0) : tex2d->GetLevelDesc(0, &d0))) {
+    _snprintf_s(why, whyLen, _TRUNCATE, "GetLevelDesc failed");
+    return false;
+  }
+  t = d3dx::Texture{};
+  t.format = uint32_t(d0.Format);
+  t.width = d0.Width;
+  t.height = d0.Height;
+  t.levels = base->GetLevelCount();
+  t.cube = cube;
+  const uint32_t faces = cube ? 6 : 1;
+  t.surfaces.reserve(size_t(faces) * t.levels);
+  for (uint32_t f = 0; f < faces; f++)
+    for (uint32_t l = 0; l < t.levels; l++) {
+      D3DSURFACE_DESC d{};
+      if (FAILED(cube ? texCube->GetLevelDesc(l, &d) : tex2d->GetLevelDesc(l, &d))) {
+        _snprintf_s(why, whyLen, _TRUNCATE, "GetLevelDesc failed (level %u)", l);
+        return false;
+      }
+      d3dx::Level nl;
+      nl.width = d.Width;
+      nl.height = d.Height;
+      if (!levelLayout(uint32_t(d.Format), d.Width, d.Height, nl.rowPitch, nl.rows)) {
+        _snprintf_s(why, whyLen, _TRUNCATE, "D3DX made D3DFORMAT %u, which the backend does not upload", unsigned(d.Format));
+        return false;
+      }
+      D3DLOCKED_RECT lr{};
+      const HRESULT hr = cube ? texCube->LockRect(D3DCUBEMAP_FACES(f), l, &lr, nullptr, D3DLOCK_READONLY)
+                              : tex2d->LockRect(l, &lr, nullptr, D3DLOCK_READONLY);
+      if (FAILED(hr) || !lr.pBits || uint32_t(lr.Pitch) < nl.rowPitch) {
+        if (SUCCEEDED(hr)) cube ? texCube->UnlockRect(D3DCUBEMAP_FACES(f), l) : tex2d->UnlockRect(l);
+        _snprintf_s(why, whyLen, _TRUNCATE, "LockRect failed face %u level %u", f, l);
+        return false;
+      }
+      nl.data.resize(size_t(nl.rowPitch) * nl.rows);
+      for (uint32_t r = 0; r < nl.rows; r++)
+        memcpy(nl.data.data() + size_t(r) * nl.rowPitch, static_cast<const uint8_t*>(lr.pBits) + size_t(r) * lr.Pitch,
+               nl.rowPitch);
+      cube ? texCube->UnlockRect(D3DCUBEMAP_FACES(f), l) : tex2d->UnlockRect(l);
+      t.surfaces.push_back(std::move(nl));
     }
   return true;
 }
@@ -439,6 +522,29 @@ void onLoadTextureFile(void* data, const char* name, void* file, uint16_t cw, bo
     t_decoded = d3dx::Texture{};
     return;
   }
+  auto* d3dTex = *reinterpret_cast<IDirect3DBaseTexture9**>(static_cast<char*>(data) + fnv::NiDX9TextureData_D3DTexture);
+  // The texture D3DX made, uploaded as it is (readBackD3DX). `reason`: why the native decoder did not produce it.
+  auto uploadD3DX = [&](const char* reason) {
+    char msg[256] = "";
+    d3dx::Texture tex;
+    if (!d3dTex) _snprintf_s(msg, _TRUNCATE, "no D3D9 texture");
+    if (d3dTex && readBackD3DX(d3dTex, tex, msg, sizeof(msg)) && be->createTexture(TexKey(data), std::move(tex))) {
+      g_c.fromD3DX++;
+      g_c.uploaded++;
+      observe::registerTexture(d3dTex, TexKey(data));
+      if (g_logged++ < 40) logf("texture: %s from D3DX's result (%s)", name ? name : "(NiFile)", reason);
+      return;
+    }
+    g_c.fromD3DXFailed++;
+    g_c.uploadFailed++;
+    logf("TEXTURE NOT UPLOADED %s (%s): D3DX's result unusable: %s", name ? name : "(NiFile)", reason,
+         msg[0] ? msg : "backend refused it");
+  };
+  if (g_native) {
+    // The decoder already declined these bytes at the D3DX call (createPlaceholder): D3DX made the texture.
+    uploadD3DX("not produced by the native decoder");
+    return;
+  }
   const uint32_t pc = (cw >> 8) & 3;
   d3dx::Precision prec = d3dx::Precision::Double;
   if (pc == 0) { prec = d3dx::Precision::Single; g_c.loadsSingle++; }
@@ -481,12 +587,11 @@ void onLoadTextureFile(void* data, const char* name, void* file, uint16_t cw, bo
   d3dx::Status st = d3dx::createTextureFromDds(bytes.data(), bytes.size(), prec, tex, &why);
   if (st != d3dx::Status::Ok) {
     (st == d3dx::Status::UnsupportedFormat || st == d3dx::Status::UnsupportedLayout ? g_c.nativeUnsupported : g_c.nativeOtherError)++;
-    if (g_logged++ < 40) logf("texture: native load of %s: %s", name ? name : "(NiFile)", why.c_str());
+    uploadD3DX(why.c_str());
     return;
   }
   g_c.nativeOk++;
   if (g_verify) {
-    auto* d3dTex = *reinterpret_cast<IDirect3DBaseTexture9**>(static_cast<char*>(data) + fnv::NiDX9TextureData_D3DTexture);
     if (!d3dTex) {
       g_c.verifySkipped++;
     } else {
@@ -502,8 +607,7 @@ void onLoadTextureFile(void* data, const char* name, void* file, uint16_t cw, bo
   }
   if (be->createTexture(TexKey(data), std::move(tex))) {  // (tex is not used after: handed over)
     g_c.uploaded++;
-    observe::registerTexture(*reinterpret_cast<void**>(static_cast<char*>(data) + fnv::NiDX9TextureData_D3DTexture),
-                             TexKey(data));
+    observe::registerTexture(d3dTex, TexKey(data));
   }
   else g_c.uploadFailed++;
 }
@@ -528,6 +632,8 @@ void logSummary() {
        g_p.textures.load(), g_p.cubes.load(), g_p.unsupported.load(), g_p.verified.load(), g_p.identical.load(),
        g_p.mismatch.load(), g_p.uploaded.load(), g_p.failed.load());
   if (g_c.placeholders) logf("textures: %llu loaded natively with empty D3D9 placeholders", g_c.placeholders.load());
+  logf("textures from D3DX's result (not produced by the native decoder): %llu uploaded, %llu NOT uploaded",
+       g_c.fromD3DX.load(), g_c.fromD3DXFailed.load());
 }
 
 }  // namespace fnvvk::textures
