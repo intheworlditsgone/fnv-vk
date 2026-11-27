@@ -307,6 +307,7 @@ std::vector<Effect> loadEffects(const std::string& dir, const std::string& cache
     e.order = GetPrivateProfileIntA("Effect", "Order", 100, ini.c_str());
     e.sceneColor = GetPrivateProfileIntA("Effect", "SceneColor", 0, ini.c_str()) != 0;
     e.skinBuffer = GetPrivateProfileIntA("Effect", "SkinBuffer", 0, ini.c_str()) != 0;
+    e.enabled = GetPrivateProfileIntA("Effect", "Enable", 1, ini.c_str()) != 0;  // the default (fnv_vk.ini overrides)
     e.requirement = lower(iniString(ini, "Effect", "Requires", ""));
     if (!e.requirement.empty() && e.requirement != "pbr") e.error = "unknown Requires '" + e.requirement + "'";
     std::vector<std::pair<int, std::string>> passSections;

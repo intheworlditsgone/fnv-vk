@@ -6,7 +6,7 @@
 //   [Effect]       Name=, Description=, Point=world|tonemap, Order=100, SceneColor=0|1 (passes read the scene colour),
 //                  Requires=pbr (runs only while the lighting's physically based mode is on),
 //                  Skip=interior,underwater,abovewater,nocascades,<param>=0 (any of them: the effect would leave the
-//                  image as it is, so it is not run)
+//                  image as it is, so it is not run), Enable=1|0 (on until the settings in fnv_vk.ini say otherwise)
 //   [Param.<name>] Label=, Type=float|int|bool|enum, Default=, Min=, Max=, Step=, Options=a,b,c (enum: the choices;
 //                  the value is the index)                                       (at most 32, in file order)
 //   [Image.<name>] Format=r8|rg8|rgba8|r16f|rg16f|rgba16f|r32f, Scale=1.0 or Size=WxH (fixed),  (at most 8)

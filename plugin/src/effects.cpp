@@ -51,7 +51,7 @@ LARGE_INTEGER g_t0{}, g_freq{};
 
 void applySettings(fx::Effect& e) {
   const std::string sec = "Effect." + e.id;
-  e.enabled = GetPrivateProfileIntA(sec.c_str(), "Enable", 1, g_ini.c_str()) != 0;
+  e.enabled = GetPrivateProfileIntA(sec.c_str(), "Enable", e.enabled ? 1 : 0, g_ini.c_str()) != 0;  // (default: effect.ini's)
   for (fx::Param& p : e.params) {
     char buf[64] = "";
     GetPrivateProfileStringA(sec.c_str(), p.name.c_str(), "", buf, sizeof(buf), g_ini.c_str());

@@ -515,6 +515,7 @@ static void testTextures(Backend& be, const char* dir) {
 #include "perf_test.inl"
 #include "grass_test.inl"
 #include "fsr_test.inl"
+#include "dofmb_test.inl"
 
 // usage: backend_test [texture dir | -] [sdp2spv cache dir (manifest.json, spv/)] [shader pack]
 static LONG CALLBACK firstChance(EXCEPTION_POINTERS* ep) {
@@ -736,6 +737,7 @@ int main(int argc, char** argv) {
   perftest::run(be);
   grasstest::run(be);
   fsrtest::run(be);
+  dofmbtest::run(be);
   if (argc > 1 && strcmp(argv[1], "-") != 0) testTextures(be, argv[1]);
   if (getenv("FNV_NO_2MB_BLOCKS")) {
     // Leave no free address-space block of 2 MiB or more (what the game's 2 GiB space looks like when full).
