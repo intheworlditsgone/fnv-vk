@@ -94,6 +94,12 @@ uint32_t backendId(Backend* be, size_t i) {
   return g_backendIds[i];
 }
 
+// TES +0x34: the interior cell the player is in, null outdoors.
+bool inInterior() {
+  const void* tes = *reinterpret_cast<const void* const*>(fnv::TES_Singleton);
+  return tes && rd<const void*>(tes, 0x34);
+}
+
 // The world camera's frustum and viewport (effects at "world"). False without a perspective camera.
 bool worldCamera(Backend::EffectFrame& f) {
   const void* sceneGraph = *reinterpret_cast<void* const*>(fnv::TESMain_spWorldRoot);
@@ -108,9 +114,8 @@ bool worldCamera(Backend::EffectFrame& f) {
     memcpy(f.cameraRows[row], static_cast<const char*>(camera) + 0x68 + 12 * row, 12);
     f.cameraRows[row][3] = rd<float>(camera, 0x8C + 4 * row);
   }
-  // TES +0x34: the interior cell the player is in, null outdoors.
   const void* tes = *reinterpret_cast<const void* const*>(fnv::TES_Singleton);
-  f.interior = tes && rd<const void*>(tes, 0x34);
+  f.interior = inInterior();
   // Outdoors, the sun light's colours at any time of day (TES +0x1C, NiLight: +0xC4 dimmer, +0xC8 ambient, +0xD4
   // diffuse; Sun::Update sets them from the weather), also without shadow cascades (night): volumetric fog's ambient.
   // sunshadows::fill writes the same values when it has cascades.
@@ -195,6 +200,7 @@ void runPoint(const char* point) {
     memcpy(f.frustum, frustum, sizeof(frustum));
     f.nearZ = 1.0f;
     f.farZ = 2.0f;
+    f.interior = inInterior();  // (effects/tonemap's interior settings)
   }
   LARGE_INTEGER now{};
   QueryPerformanceCounter(&now);

@@ -182,17 +182,36 @@ static void run(Backend& be, RtKey bb, RtKey bbDepth) {
   fr.farZ = 2;
 
   // Runs every operator with the backend's current output; returns the worst difference.
-  auto runAll = [&](bool hdr, float peakOverPaper, const char* label) {
+  // Interior settings (p_interior, the p_i* parameters): mode 0 none; mode 1 an interior cell with its own settings on,
+  // the tested values in the interior parameters and different ones (decoys) in the general ones; mode 2 outdoors with
+  // the interior settings on, the decoys in the interior parameters. Every mode must give the same image.
+  auto runAll = [&](bool hdr, float peakOverPaper, const char* label, int mode = 0) {
     float worstAll = 0;
+    fr.interior = mode == 1;
     for (int op = 0; op < 10; op++) {
       float params[32][4] = {};
       // Vanilla at the defaults (bit-exact clip); the others graded. Odd operators desaturate, even ones saturate.
       const float exposure = op == 0 ? 0.0f : 0.5f, white = 3.0f, knee = 0.5f;
       const float contrast = op == 0 ? 1.0f : op % 2 ? 1.25f : 0.8f, saturation = op == 0 ? 1.0f : op % 2 ? 0.6f : 1.5f;
+      auto tested = [&](const std::string& n, float def) {
+        return n == "op" ? float(op) : n == "exposure" ? exposure : n == "white" ? white : n == "contrast" ? contrast
+             : n == "saturation" ? saturation : def;
+      };
+      auto decoy = [&](const std::string& n, float def) {
+        return n == "op" ? float((op + 3) % 10) : n == "exposure" ? -1.5f : n == "white" ? 9.0f : n == "contrast" ? 1.6f
+             : n == "saturation" ? 0.2f : n == "autoExposure" ? 1.0f : def;
+      };
       for (size_t k = 0; k < tm->params.size(); k++) {
         const std::string& n = tm->params[k].name;
-        params[k][0] = n == "op" ? float(op) : n == "exposure" ? exposure : n == "white" ? white : n == "knee" ? knee
-                     : n == "contrast" ? contrast : n == "saturation" ? saturation : tm->params[k].def;
+        const float def = tm->params[k].def;
+        // p_i<Name>: the interior counterpart of p_<name>.
+        const bool isInterior = n.size() > 1 && n[0] == 'i' && isupper(uint8_t(n[1]));
+        const std::string general = isInterior ? std::string(1, char(tolower(uint8_t(n[1])))) + n.substr(2) : n;
+        if (n == "knee") params[k][0] = knee;
+        else if (n == "interior") params[k][0] = mode != 0 ? 1.0f : 0.0f;
+        else if (mode == 0) params[k][0] = isInterior ? decoy(general, def) : tested(n, def);
+        else if (mode == 1) params[k][0] = isInterior ? tested(general, def) : decoy(n, def);
+        else params[k][0] = isInterior ? decoy(general, def) : tested(n, def);
       }
       be.writeTarget(rt, scene.data(), W * 8);
       be.beginGroup(&rt, 1, 0);
@@ -226,6 +245,14 @@ static void run(Backend& be, RtKey bb, RtKey bbDepth) {
 
   // SDR.
   runAll(false, 1.0f, "SDR");
+  {
+    int interiorParams = 0;
+    for (const fx::Param& p : tm->params) interiorParams += p.name == "interior" || (p.name.size() > 1 && p.name[0] == 'i' && isupper(uint8_t(p.name[1])));
+    if (interiorParams != 10) fail("hdr: tonemap has %d interior parameters, expected 10 (interior + 9)", interiorParams);
+  }
+  runAll(false, 1.0f, "SDR, interior cell with its own settings", 1);
+  runAll(false, 1.0f, "SDR, outdoors with interior settings on", 2);
+  fr.interior = false;
 
   // HDR output on the test window: present until the swapchain is recreated with it.
   HdrSettings hs;

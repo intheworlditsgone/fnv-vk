@@ -9,6 +9,9 @@
 // distance from mid grey (0.18) in log2 space, saturation scales each colour's distance from its BT.709 luminance.
 // At 1.0 both are skipped (the vanilla operator stays bit-exact).
 //
+// Interiors: with p_interior on, an interior cell (fnv.shadowInfo.z 1, set by the plugin at this point too) uses the
+// p_i* parameters instead (settings()).
+//
 // SDR output: the operator's result (0..1) is the image.
 // HDR output: each operator keeps its look in shadows and midtones and only the highlights are extended toward the
 // display's peak. The operator's result is scaled by the luminance ratio of two neutral curves: both are the identity
@@ -93,10 +96,24 @@ vec3 lottes(vec3 x) {
   return clamp(pow(x, vec3(a)) / (pow(x, vec3(a * d)) * b + c), 0.0, 1.0);
 }
 
-vec3 tonemap(vec3 x) {
-  switch (p_op) {
+// The settings in effect: the interior ones in an interior cell (fnv.shadowInfo.z 1) while "Interiors: own settings" is
+// on, the general ones otherwise.
+struct Settings {
+  int op;
+  float exposure, contrast, saturation, white;
+  bool autoExposure;
+  float aeTarget, aeMin, aeMax;
+};
+Settings settings() {
+  if (p_interior && fnv.shadowInfo.z != 0.0)
+    return Settings(p_iOp, p_iExposure, p_iContrast, p_iSaturation, p_iWhite, p_iAutoExposure, p_iAeTarget, p_iAeMin, p_iAeMax);
+  return Settings(p_op, p_exposure, p_contrast, p_saturation, p_white, p_autoExposure, p_aeTarget, p_aeMin, p_aeMax);
+}
+
+vec3 tonemap(vec3 x, int op, float white) {
+  switch (op) {
     case 1: return reinhard(x);
-    case 2: return reinhardExtended(x, p_white);
+    case 2: return reinhardExtended(x, white);
     case 3: return acesNarkowicz(x);
     case 4: return acesHill(x);
     case 5: return agx(x, false);
@@ -115,11 +132,11 @@ float rolloff(float y, float k, float m) {
   return k + (m - k) * t / (1.0 + t);
 }
 
-vec3 grade(vec3 x) {
-  if (p_contrast != 1.0) x = 0.18 * pow(max(x, 0.0) / 0.18, vec3(p_contrast));
-  if (p_saturation != 1.0) {
+vec3 grade(vec3 x, float contrast, float saturation) {
+  if (contrast != 1.0) x = 0.18 * pow(max(x, 0.0) / 0.18, vec3(contrast));
+  if (saturation != 1.0) {
     float l = dot(x, kLuma);
-    x = max(l + p_saturation * (x - l), 0.0);
+    x = max(l + saturation * (x - l), 0.0);
   }
   return x;
 }
@@ -127,15 +144,16 @@ vec3 grade(vec3 x) {
 void main() {
   ivec2 p = ivec2(fnvPixel());
   vec4 s = fnvSceneColor(p);
+  const Settings c = settings();
   // Auto-exposure (aeadapt.frag): the correction that brings the adapted log-average luminance to the target (mid grey
   // 0.18 times 2^target), within the allowed range; off: none (the manual exposure alone, as before).
-  float ev = p_exposure;
-  if (p_autoExposure) {
+  float ev = c.exposure;
+  if (c.autoExposure) {
     const float adapted = texelFetch(sampler2D(img_aeadapt, fnvPoint), ivec2(0), 0).r;
-    ev += clamp(log2(0.18) + p_aeTarget - adapted, p_aeMin, p_aeMax);
+    ev += clamp(log2(0.18) + c.aeTarget - adapted, c.aeMin, c.aeMax);
   }
-  vec3 x = grade(pow(max(s.rgb, 0.0), vec3(2.2)) * exp2(ev));
-  vec3 t = tonemap(x);
+  vec3 x = grade(pow(max(s.rgb, 0.0), vec3(2.2)) * exp2(ev), c.contrast, c.saturation);
+  vec3 t = tonemap(x, c.op, c.white);
   if (fnv.hdr.x != 0.0) {
     float y = dot(x, kLuma);
     float k = p_knee;
