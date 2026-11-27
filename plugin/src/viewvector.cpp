@@ -1,10 +1,12 @@
 #include "viewvector.h"
 
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "common.h"
+#include "replacements.h"
 
 namespace fnvvk::viewvector {
 namespace {
@@ -223,6 +225,39 @@ void __fastcall hkL30SetupPass(void* self, void* edx, int pass) {
   oL30SetupPass(self, edx, pass);
 }
 
+// The eye position of each render. EyePosition (and Lighting30's eyepos) is the camera's world position
+// (kShaderLightConstants[30]) taken into the geometry's space, and only ShadowSceneNode::PreOnVisible (0x00B5E870) sets
+// it, from the camera culling the scene node. The first-person view is culled and drawn with its own camera
+// (Main::DrawWorld_MTSetup1stPerson 0x00874C10: the player's first-person node updated at the origin, the camera at
+// Camera1st minus the player's position; Main::DrawWorld_MTRender1stPerson 0x00875110 draws it with
+// BSShaderUtil::RenderScene), and no scene node is culled for it: the constant keeps the world camera's world position,
+// thousands of units from the first-person geometry, and the view vector there points in a fixed direction instead of
+// to the eye (the player's hands and weapon lit as if seen from elsewhere). Each render through RenderScene now has
+// its own camera's world position (NiAVObject world translation +0x8C, the value PreOnVisible takes), restored after.
+// With the lighting replacement's physically based mode off, the game's own Blinn-Phong half vectors (which read the
+// same constant) stay exactly the original.
+float* const kEyeConstant = reinterpret_cast<float*>(0x011FA2A0);
+bool physicallyBased() {
+  for (const fx::Replacement& r : replacements::list())
+    if (r.id == "lighting" && replacements::active(r))
+      for (const fx::Param& p : r.params)
+        if (p.name == "pbr") return p.value != 0.0f;
+  return false;
+}
+using RenderSceneFn = void(__cdecl*)(void* camera, void* accumulator, int useSpu);
+RenderSceneFn oRenderScene = nullptr;
+void __cdecl hkRenderScene(void* camera, void* accumulator, int useSpu) {
+  if (!camera || !physicallyBased()) {
+    oRenderScene(camera, accumulator, useSpu);
+    return;
+  }
+  float saved[3];
+  memcpy(saved, kEyeConstant, sizeof(saved));
+  memcpy(kEyeConstant, static_cast<const char*>(camera) + 0x8C, sizeof(saved));
+  oRenderScene(camera, accumulator, useSpu);
+  memcpy(kEyeConstant, saved, sizeof(saved));
+}
+
 }  // namespace
 
 void beginWorld() {
@@ -245,6 +280,7 @@ bool install(bool needed) {
   ok &= hook(0x00B7DAB0, &hkSetupGeometry, &oSetupGeometry,
              "ShadowLightShader::SetupGeometryConstants (tangent-to-world frame, skinned)");
   ok &= hook(0x00BAC9C0, &hkGrassSetup, &oGrassSetup, "TallGrassShader::SetupGeometryConstants (the grass's canopy height)");
+  ok &= hook(0x00B6C0D0, &hkRenderScene, &oRenderScene, "BSShaderUtil::RenderScene (each render's eye position)");
   return ok;
 }
 
